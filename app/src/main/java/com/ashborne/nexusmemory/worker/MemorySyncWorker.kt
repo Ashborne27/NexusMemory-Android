@@ -13,6 +13,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.Result as KotlinResult
 
 data class CloudMemoryItem(
     val seq: Int,
@@ -92,7 +93,7 @@ class MemorySyncWorker(
             )
         }
 
-        suspend fun fetchCloudMemories(token: String, limit: Int = 20): Result<List<CloudMemoryItem>> =
+        suspend fun fetchCloudMemories(token: String, limit: Int = 20): KotlinResult<List<CloudMemoryItem>> =
             withContext(Dispatchers.IO) {
                 val http = OkHttpClient.Builder()
                     .connectTimeout(25, TimeUnit.SECONDS)
@@ -111,7 +112,7 @@ class MemorySyncWorker(
                     http.newCall(reqBuilder.build()).execute().use { resp ->
                         val bodyStr = resp.body?.string().orEmpty()
                         if (!resp.isSuccessful) {
-                            return@withContext Result.failure(Exception("HTTP ${resp.code}"))
+                            return@withContext KotlinResult.failure(Exception("HTTP ${resp.code}"))
                         }
                         val root = JSONObject(bodyStr)
                         val arr = root.optJSONArray("items")
@@ -129,10 +130,10 @@ class MemorySyncWorker(
                                 )
                             }
                         }
-                        Result.success(items)
+                        KotlinResult.success(items)
                     }
                 } catch (e: Exception) {
-                    Result.failure(e)
+                    KotlinResult.failure(e)
                 }
             }
     }
