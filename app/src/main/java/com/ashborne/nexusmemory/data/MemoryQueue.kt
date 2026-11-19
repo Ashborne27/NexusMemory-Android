@@ -11,6 +11,13 @@ data class PendingMemory(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "synced_memories")
+data class SyncedMemory(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val encryptedPayload: String,
+    val syncedAt: Long = System.currentTimeMillis()
+)
+
 @Dao
 interface MemoryDao {
     @Insert
@@ -24,9 +31,19 @@ interface MemoryDao {
 
     @Query("DELETE FROM pending_memories WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Insert
+    suspend fun insertSynced(item: SyncedMemory): Long
+
+    @Query("SELECT * FROM synced_memories ORDER BY id DESC LIMIT 30")
+    fun observeRecentSynced(): Flow<List<SyncedMemory>>
 }
 
-@Database(entities = [PendingMemory::class], version = 1, exportSchema = false)
+@Database(
+    entities = [PendingMemory::class, SyncedMemory::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class NexusDatabase : RoomDatabase() {
     abstract fun dao(): MemoryDao
 
@@ -38,7 +55,9 @@ abstract class NexusDatabase : RoomDatabase() {
                     context.applicationContext,
                     NexusDatabase::class.java,
                     "nexus_mobile_vault.db"
-                ).build().also { INSTANCE = it }
+                ).fallbackToDestructiveMigration()
+                    .build()
+                    .also { INSTANCE = it }
             }
     }
 }

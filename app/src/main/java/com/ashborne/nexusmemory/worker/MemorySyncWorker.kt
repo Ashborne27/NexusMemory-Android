@@ -3,13 +3,23 @@ package com.ashborne.nexusmemory.worker
 import android.content.Context
 import androidx.work.*
 import com.ashborne.nexusmemory.data.NexusDatabase
+import com.ashborne.nexusmemory.data.SyncedMemory
 import com.ashborne.nexusmemory.security.CryptoVault
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+
+data class CloudMemoryItem(
+    val seq: Int,
+    val clientId: String,
+    val data: String,
+    val receivedAt: String
+)
 
 class MemorySyncWorker(
     appContext: Context,
@@ -47,6 +57,7 @@ class MemorySyncWorker(
             try {
                 client.newCall(reqBuilder.build()).execute().use { resp ->
                     if (resp.isSuccessful) {
+                        dao.insertSynced(SyncedMemory(encryptedPayload = item.encryptedPayload))
                         dao.deleteById(item.id)
                     } else if (resp.code == 401) {
                         return Result.failure()
@@ -80,5 +91,49 @@ class MemorySyncWorker(
                 request
             )
         }
+
+        suspend fun fetchCloudMemories(token: String, limit: Int = 20): Result<List<CloudMemoryItem>> =
+            withContext(Dispatchers.IO) {
+                val http = OkHttpClient.Builder()
+                    .connectTimeout(25, TimeUnit.SECONDS)
+                    .readTimeout(35, TimeUnit.SECONDS)
+                    .build()
+
+                val reqBuilder = Request.Builder()
+                    .url("https://nexus-memory-server.onrender.com/api/memory?limit=$limit")
+                    .get()
+
+                if (token.isNotEmpty()) {
+                    reqBuilder.addHeader("Authorization", "Bearer $token")
+                }
+
+                try {
+                    http.newCall(reqBuilder.build()).execute().use { resp ->
+                        val bodyStr = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            return@withContext Result.failure(Exception("HTTP ${resp.code}"))
+                        }
+                        val root = JSONObject(bodyStr)
+                        val arr = root.optJSONArray("items")
+                        val items = mutableListOf<CloudMemoryItem>()
+                        if (arr != null) {
+                            for (i in 0 until arr.length()) {
+                                val obj = arr.getJSONObject(i)
+                                items.add(
+                                    CloudMemoryItem(
+                                        seq = obj.optInt("seq", 0),
+                                        clientId = obj.optString("client_id", ""),
+                                        data = obj.optString("data", ""),
+                                        receivedAt = obj.optString("received_at", "")
+                                    )
+                                )
+                            }
+                        }
+                        Result.success(items)
+                    }
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
     }
 }
