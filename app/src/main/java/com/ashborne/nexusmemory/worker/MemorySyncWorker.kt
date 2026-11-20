@@ -75,6 +75,7 @@ class MemorySyncWorker(
 
     companion object {
         private const val WORK_NAME = "nexus_memory_sync"
+        private const val PERIODIC_WORK_NAME = "nexus_memory_periodic_sync"
 
         fun enqueue(context: Context) {
             val constraints = Constraints.Builder()
@@ -90,6 +91,25 @@ class MemorySyncWorker(
                 WORK_NAME,
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
                 request
+            )
+        }
+
+        fun schedulePeriodic(context: Context) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val periodicRequest = PeriodicWorkRequestBuilder<MemorySyncWorker>(
+                15, TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                PERIODIC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                periodicRequest
             )
         }
 

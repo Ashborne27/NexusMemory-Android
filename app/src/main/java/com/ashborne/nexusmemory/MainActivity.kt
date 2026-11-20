@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ashborne.nexusmemory.data.NexusDatabase
 import com.ashborne.nexusmemory.data.PendingMemory
@@ -18,11 +19,15 @@ import com.ashborne.nexusmemory.security.CryptoVault
 import com.ashborne.nexusmemory.worker.CloudMemoryItem
 import com.ashborne.nexusmemory.worker.MemorySyncWorker
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         MemorySyncWorker.enqueue(this)
+        MemorySyncWorker.schedulePeriodic(this)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -43,9 +48,46 @@ fun NexusScreen() {
 
     var memoryInput by remember { mutableStateOf("") }
     var tokenInput by remember { mutableStateOf(CryptoVault.getToken(context)) }
-    var statusText by remember { mutableStateOf("Prêt — Keystore & synchronisation actifs") }
+    var statusText by remember { mutableStateOf("Prêt — Sync auto & Keystore actifs") }
     var cloudItems by remember { mutableStateOf<List<CloudMemoryItem>>(emptyList()) }
     var loadingCloud by remember { mutableStateOf(false) }
+    var previousPending by remember { mutableIntStateOf(-1) }
+
+    val dateFormatter = remember {
+        SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
+    }
+
+    suspend fun refreshCloudSilently(token: String) {
+        if (token.isEmpty()) return
+        loadingCloud = true
+        val res = MemorySyncWorker.fetchCloudMemories(token, limit = 20)
+        loadingCloud = false
+        res.onSuccess { list ->
+            cloudItems = list
+            statusText = "Synchronisé — Cloud à jour (${list.size} entrées)"
+        }.onFailure { err ->
+            statusText = "Erreur cloud : ${err.message}"
+        }
+    }
+
+    // Chargement automatique à l'ouverture de l'app
+    LaunchedEffect(Unit) {
+        val activeToken = CryptoVault.getToken(context)
+        if (activeToken.isNotEmpty()) {
+            refreshCloudSilently(activeToken)
+        }
+    }
+
+    // Rafraîchissement automatique de l'historique cloud dès que la file locale se vide
+    LaunchedEffect(pendingCount) {
+        if (previousPending > 0 && pendingCount == 0) {
+            val activeToken = CryptoVault.getToken(context)
+            if (activeToken.isNotEmpty()) {
+                refreshCloudSilently(activeToken)
+            }
+        }
+        previousPending = pendingCount
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -54,7 +96,7 @@ fun NexusScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Text("NexusMemory", style = MaterialTheme.typography.headlineMedium)
+            Text("NexusMemory v1.2", style = MaterialTheme.typography.headlineMedium)
         }
 
         item {
@@ -71,7 +113,7 @@ fun NexusScreen() {
                 value = memoryInput,
                 onValueChange = { memoryInput = it },
                 label = { Text("Nouvelle mémoire") },
-                modifier = Modifier.fillMaxWidth().height(120.dp)
+                modifier = Modifier.fillMaxWidth().height(115.dp)
             )
         }
 
@@ -85,23 +127,24 @@ fun NexusScreen() {
                                 val cipher = CryptoVault.encrypt(context, clean)
                                 dao.insert(PendingMemory(encryptedPayload = cipher))
                                 memoryInput = ""
-                                statusText = "Chiffré (Keystore) et mis en file"
+                                statusText = "Chiffré (Keystore) — Envoi auto..."
                                 MemorySyncWorker.enqueue(context)
                             }
                         }
                     },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Enregistrer")
+                    Text("Enregistrer", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
 
                 OutlinedButton(
                     onClick = {
                         MemorySyncWorker.enqueue(context)
-                        statusText = "Synchronisation déclenchée..."
-                    }
+                        statusText = "Synchronisation manuelle..."
+                    },
+                    modifier = Modifier.weight(0.65f)
                 ) {
-                    Text("Sync")
+                    Text("Sync", maxLines = 1, softWrap = false)
                 }
             }
         }
@@ -122,31 +165,32 @@ fun NexusScreen() {
                 Button(
                     onClick = {
                         CryptoVault.saveToken(context, tokenInput)
-                        statusText = "Jeton sécurisé dans Keystore"
+                        statusText = "Jeton enregistré dans Keystore"
                         MemorySyncWorker.enqueue(context)
+                        scope.launch {
+                            refreshCloudSilently(CryptoVault.getToken(context))
+                        }
                     },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Sauvegarder jeton")
+                    Text("Sauver jeton", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
 
                 OutlinedButton(
                     onClick = {
                         val activeToken = CryptoVault.getToken(context)
-                        loadingCloud = true
                         scope.launch {
-                            val res = MemorySyncWorker.fetchCloudMemories(activeToken, limit = 15)
-                            loadingCloud = false
-                            res.onSuccess { list ->
-                                cloudItems = list
-                                statusText = "Historique cloud chargé (${list.size} entrées)"
-                            }.onFailure { err ->
-                                statusText = "Erreur cloud : ${err.message}"
-                            }
+                            refreshCloudSilently(activeToken)
                         }
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text(if (loadingCloud) "..." else "Cloud GET")
+                    Text(
+                        if (loadingCloud) "Chargement..." else "Cloud GET",
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -157,8 +201,10 @@ fun NexusScreen() {
             }
             items(recentSynced) { item ->
                 val clearText = CryptoVault.decrypt(context, item.encryptedPayload)
+                val formattedDate = dateFormatter.format(Date(item.syncedAt))
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(formattedDate, style = MaterialTheme.typography.labelSmall)
                         Text(clearText, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
@@ -171,7 +217,11 @@ fun NexusScreen() {
             }
             items(cloudItems) { item ->
                 val decoded = CryptoVault.decrypt(context, item.data)
-                val display = if (decoded.startsWith("[Déchiffrement impossible]")) item.data else "$decoded (chiffré: ${item.data.take(16)}...)"
+                val display = if (decoded.startsWith("[Déchiffrement impossible]")) {
+                    item.data
+                } else {
+                    "$decoded\n[Cipher: ${item.data.take(18)}...]"
+                }
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("#${item.seq} • ${item.receivedAt}", style = MaterialTheme.typography.labelSmall)
