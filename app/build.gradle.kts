@@ -5,6 +5,10 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val nexusTokenProp = (project.findProperty("NEXUS_TOKEN") as String?)
+    ?: System.getenv("NEXUS_TOKEN")
+    ?: ""
+
 android {
     namespace = "com.ashborne.nexusmemory"
     compileSdk = 35
@@ -13,8 +17,9 @@ android {
         applicationId = "com.ashborne.nexusmemory"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
+        buildConfigField("String", "NEXUS_TOKEN", "\"${nexusTokenProp.replace("\"", "\\\"")}\"")
     }
 
     buildTypes {
@@ -32,6 +37,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

@@ -10,14 +10,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ashborne.nexusmemory.data.NexusDatabase
 import com.ashborne.nexusmemory.data.PendingMemory
 import com.ashborne.nexusmemory.security.CryptoVault
 import com.ashborne.nexusmemory.worker.CloudMemoryItem
 import com.ashborne.nexusmemory.worker.MemorySyncWorker
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -26,12 +25,13 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CryptoVault.ensureBootstrappedToken(this, BuildConfig.NEXUS_TOKEN)
         MemorySyncWorker.enqueue(this)
         MemorySyncWorker.schedulePeriodic(this)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    NexusScreen()
+                    NexusAutoScreen()
                 }
             }
         }
@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun NexusScreen() {
+fun NexusAutoScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dao = remember { NexusDatabase.get(context).dao() }
@@ -47,44 +47,39 @@ fun NexusScreen() {
     val recentSynced by dao.observeRecentSynced().collectAsState(initial = emptyList())
 
     var memoryInput by remember { mutableStateOf("") }
-    var tokenInput by remember { mutableStateOf(CryptoVault.getToken(context)) }
-    var statusText by remember { mutableStateOf("Prêt — Sync auto & Keystore actifs") }
+    var statusText by remember { mutableStateOf("Mode 100% Automatique actif") }
     var cloudItems by remember { mutableStateOf<List<CloudMemoryItem>>(emptyList()) }
-    var loadingCloud by remember { mutableStateOf(false) }
     var previousPending by remember { mutableIntStateOf(-1) }
 
-    val dateFormatter = remember {
-        SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
-    }
+    val dateFormatter = remember { SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()) }
 
-    suspend fun refreshCloudSilently(token: String) {
-        if (token.isEmpty()) return
-        loadingCloud = true
-        val res = MemorySyncWorker.fetchCloudMemories(token, limit = 20)
-        loadingCloud = false
-        res.onSuccess { list ->
-            cloudItems = list
-            statusText = "Synchronisé — Cloud à jour (${list.size} entrées)"
-        }.onFailure { err ->
-            statusText = "Erreur cloud : ${err.message}"
-        }
-    }
-
-    // Chargement automatique à l'ouverture de l'app
-    LaunchedEffect(Unit) {
+    suspend fun syncAndFetch() {
+        MemorySyncWorker.enqueue(context)
         val activeToken = CryptoVault.getToken(context)
         if (activeToken.isNotEmpty()) {
-            refreshCloudSilently(activeToken)
+            MemorySyncWorker.fetchCloudMemories(activeToken, limit = 20)
+                .onSuccess { list ->
+                    cloudItems = list
+                    statusText = "Auto-sync OK • ${list.size} entrées cloud"
+                }
+                .onFailure { err ->
+                    statusText = "En attente réseau (${err.message})"
+                }
+        } else {
+            statusText = "En attente de NEXUS_TOKEN (build/Keystore)"
         }
     }
 
-    // Rafraîchissement automatique de l'historique cloud dès que la file locale se vide
+    LaunchedEffect(Unit) {
+        while (true) {
+            syncAndFetch()
+            delay(30_000L)
+        }
+    }
+
     LaunchedEffect(pendingCount) {
         if (previousPending > 0 && pendingCount == 0) {
-            val activeToken = CryptoVault.getToken(context)
-            if (activeToken.isNotEmpty()) {
-                refreshCloudSilently(activeToken)
-            }
+            syncAndFetch()
         }
         previousPending = pendingCount
     }
@@ -96,7 +91,7 @@ fun NexusScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Text("NexusMemory v1.2", style = MaterialTheme.typography.headlineMedium)
+            Text("NexusMemory Auto", style = MaterialTheme.typography.headlineMedium)
         }
 
         item {
@@ -112,86 +107,26 @@ fun NexusScreen() {
             OutlinedTextField(
                 value = memoryInput,
                 onValueChange = { memoryInput = it },
-                label = { Text("Nouvelle mémoire") },
-                modifier = Modifier.fillMaxWidth().height(115.dp)
-            )
-        }
-
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = {
-                        val clean = memoryInput.trim()
-                        if (clean.isNotEmpty()) {
-                            scope.launch {
-                                val cipher = CryptoVault.encrypt(context, clean)
-                                dao.insert(PendingMemory(encryptedPayload = cipher))
-                                memoryInput = ""
-                                statusText = "Chiffré (Keystore) — Envoi auto..."
-                                MemorySyncWorker.enqueue(context)
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Enregistrer", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        MemorySyncWorker.enqueue(context)
-                        statusText = "Synchronisation manuelle..."
-                    },
-                    modifier = Modifier.weight(0.65f)
-                ) {
-                    Text("Sync", maxLines = 1, softWrap = false)
-                }
-            }
-        }
-
-        item {
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = tokenInput,
-                onValueChange = { tokenInput = it },
-                label = { Text("NEXUS_TOKEN (Render)") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                label = { Text("Mémoire (envoi auto)") },
+                modifier = Modifier.fillMaxWidth().height(110.dp)
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = {
-                        CryptoVault.saveToken(context, tokenInput)
-                        statusText = "Jeton enregistré dans Keystore"
-                        MemorySyncWorker.enqueue(context)
+            Button(
+                onClick = {
+                    val clean = memoryInput.trim()
+                    if (clean.isNotEmpty()) {
                         scope.launch {
-                            refreshCloudSilently(CryptoVault.getToken(context))
+                            val cipher = CryptoVault.encrypt(context, clean)
+                            dao.insert(PendingMemory(encryptedPayload = cipher))
+                            memoryInput = ""
+                            statusText = "Chiffré — Envoi automatique..."
+                            syncAndFetch()
                         }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Sauver jeton", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        val activeToken = CryptoVault.getToken(context)
-                        scope.launch {
-                            refreshCloudSilently(activeToken)
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        if (loadingCloud) "Chargement..." else "Cloud GET",
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Capturer (Auto-Sync)")
             }
         }
 
@@ -201,10 +136,9 @@ fun NexusScreen() {
             }
             items(recentSynced) { item ->
                 val clearText = CryptoVault.decrypt(context, item.encryptedPayload)
-                val formattedDate = dateFormatter.format(Date(item.syncedAt))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(formattedDate, style = MaterialTheme.typography.labelSmall)
+                        Text(dateFormatter.format(Date(item.syncedAt)), style = MaterialTheme.typography.labelSmall)
                         Text(clearText, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
