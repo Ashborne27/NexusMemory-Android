@@ -3,6 +3,7 @@ package com.ashborne.nexusmemory.security
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import androidx.security.crypto.MasterKey.KeyScheme
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
@@ -13,7 +14,9 @@ object CryptoVault {
     private fun prefs(context: Context) = EncryptedSharedPreferences.create(
         context,
         PREFS_NAME,
-        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+        MasterKey.Builder(context, MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+            .setKeyScheme(KeyScheme.AES256_GCM)
+            .build(),
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_GCM,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
