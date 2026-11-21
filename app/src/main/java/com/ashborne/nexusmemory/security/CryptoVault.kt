@@ -13,9 +13,7 @@ object CryptoVault {
     private fun prefs(context: Context) = EncryptedSharedPreferences.create(
         context,
         PREFS_NAME,
-        MasterKey.Builder(context)
-            .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
-            .build(),
+        MasterKey.Builder(context).build(),
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_GCM,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
