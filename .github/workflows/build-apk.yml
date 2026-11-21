@@ -24,7 +24,16 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
           NEXUS_TOKEN: ${{ secrets.NEXUS_TOKEN }}
-        run: ./gradlew assembleDebug -PNEXUS_TOKEN="$NEXUS_TOKEN"
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug -PNEXUS_TOKEN="$NEXUS_TOKEN"
+          elif command -v gradle >/dev/null 2>&1; then
+            gradle assembleDebug -PNEXUS_TOKEN="$NEXUS_TOKEN"
+          else
+            echo "gradlew introuvable et gradle non installé sur le runner"
+            exit 1
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
