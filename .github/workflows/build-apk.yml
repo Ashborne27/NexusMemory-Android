@@ -19,11 +19,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Build Debug APK
         env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
           NEXUS_TOKEN: ${{ secrets.NEXUS_TOKEN }}
         run: ./gradlew assembleDebug -PNEXUS_TOKEN="$NEXUS_TOKEN"
 
