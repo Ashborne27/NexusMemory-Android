@@ -1,6 +1,7 @@
 package com.ashborne.nexusmemory.worker
 
 import android.content.Context
+import android.os.StatFs
 import androidx.work.*
 import com.ashborne.nexusmemory.data.NexusDatabase
 import com.ashborne.nexusmemory.data.SyncedMemory
@@ -76,6 +77,48 @@ class MemorySyncWorker(
     companion object {
         private const val WORK_NAME = "nexus_memory_sync"
         private const val PERIODIC_WORK_NAME = "nexus_memory_periodic_sync"
+
+        fun getLocalAvailableBytes(context: Context): Long {
+            return try {
+                val stat = StatFs(context.filesDir.absolutePath)
+                stat.availableBytes
+            } catch (_: Exception) {
+                0L
+            }
+        }
+
+        suspend fun fetchRenderAvailableBytes(token: String): Long? = withContext(Dispatchers.IO) {
+            val http = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .build()
+
+            val reqBuilder = Request.Builder()
+                .url("https://nexus-memory-server.onrender.com/api/storage")
+                .get()
+
+            if (token.isNotEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+
+            return@withContext try {
+                http.newCall(reqBuilder.build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    val bodyStr = resp.body?.string().orEmpty()
+                    val root = JSONObject(bodyStr)
+                    if (root.has("available_bytes")) {
+                        root.optLong("available_bytes", -1L).takeIf { it >= 0L }
+                    } else if (root.has("free_bytes")) {
+                        root.optLong("free_bytes", -1L).takeIf { it >= 0L }
+                    } else {
+                        null
+                    }
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
 
         fun enqueue(context: Context) {
             val constraints = Constraints.Builder()

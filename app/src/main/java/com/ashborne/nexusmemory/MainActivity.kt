@@ -38,6 +38,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
+fun formatStorageBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 Mo"
+    val gb = bytes / (1024.0 * 1024.0 * 1024.0)
+    return if (gb >= 1.0) {
+        String.format(Locale.getDefault(), "%.2f Go", gb)
+    } else {
+        val mb = bytes / (1024.0 * 1024.0)
+        String.format(Locale.getDefault(), "%.1f Mo", mb)
+    }
+}
+
 @Composable
 fun NexusAutoScreen() {
     val context = LocalContext.current
@@ -51,11 +63,23 @@ fun NexusAutoScreen() {
     var cloudItems by remember { mutableStateOf<List<CloudMemoryItem>>(emptyList()) }
     var previousPending by remember { mutableIntStateOf(-1) }
 
+    var hostAvailableBytes by remember {
+        mutableStateOf(MemorySyncWorker.getLocalAvailableBytes(context))
+    }
+    var renderAvailableBytes by remember { mutableStateOf<Long?>(null) }
+
+
     val dateFormatter = remember { SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()) }
 
     suspend fun syncAndFetch() {
         MemorySyncWorker.enqueue(context)
         val activeToken = CryptoVault.getToken(context)
+
+            hostAvailableBytes = MemorySyncWorker.getLocalAvailableBytes(context)
+            if (activeToken.isNotEmpty()) {
+                renderAvailableBytes = MemorySyncWorker.fetchRenderAvailableBytes(activeToken)
+            }
+
         if (activeToken.isNotEmpty()) {
             MemorySyncWorker.fetchCloudMemories(activeToken, limit = 20)
                 .onSuccess { list ->
