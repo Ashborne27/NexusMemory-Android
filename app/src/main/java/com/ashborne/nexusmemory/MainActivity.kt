@@ -127,6 +127,34 @@ fun NexusAutoScreen() {
             }
         }
 
+            item {
+                val totalAvailable = renderAvailableBytes?.let { hostAvailableBytes + it }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "Espace disponible",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "Appareil : ${formatStorageBytes(hostAvailableBytes)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "Render : ${renderAvailableBytes?.let { formatStorageBytes(it) } ?: "Non exposé (/api/storage)"}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "Total : ${totalAvailable?.let { formatStorageBytes(it) } ?: "${formatStorageBytes(hostAvailableBytes)} (Render non exposé)"}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+
         item {
             OutlinedTextField(
                 value = memoryInput,
