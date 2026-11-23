@@ -100,6 +100,39 @@ class MemorySyncWorker(
             }
         }
 
+        suspend fun fetchRenderRamPair(token: String): Pair<Long?, Long?> = withContext(Dispatchers.IO) {
+            val http = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .build()
+            val reqBuilder = Request.Builder()
+                .url("https://nexus-memory-server.onrender.com/api/storage")
+                .get()
+            if (token.isNotEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+            return@withContext try {
+                http.newCall(reqBuilder.build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use Pair(null, null)
+                    val bodyStr = resp.body?.string().orEmpty()
+                    val root = JSONObject(bodyStr)
+                    val avail = if (root.has("ram_available_bytes")) {
+                        root.optLong("ram_available_bytes", -1L).takeIf { it >= 0L }
+                    } else {
+                        null
+                    }
+                    val total = if (root.has("ram_total_bytes")) {
+                        root.optLong("ram_total_bytes", -1L).takeIf { it >= 0L }
+                    } else {
+                        null
+                    }
+                    Pair(avail, total)
+                }
+            } catch (_: Exception) {
+                Pair(null, null)
+            }
+        }
+
         suspend fun fetchRenderRamAvailableBytes(token: String): Long? = withContext(Dispatchers.IO) {
             val http = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)

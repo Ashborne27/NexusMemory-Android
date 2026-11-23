@@ -71,6 +71,7 @@ fun NexusAutoScreen() {
     var hostRamAvailBytes by remember { mutableStateOf(initialHostRam.first) }
     var hostRamTotalBytes by remember { mutableStateOf(initialHostRam.second) }
     var renderRamAvailBytes by remember { mutableStateOf<Long?>(null) }
+    var renderRamTotalBytes by remember { mutableStateOf<Long?>(null) }
 
 
 
@@ -89,7 +90,9 @@ fun NexusAutoScreen() {
             hostRamAvailBytes = latestHostRam.first
             hostRamTotalBytes = latestHostRam.second
             if (activeToken.isNotEmpty()) {
-                renderRamAvailBytes = MemorySyncWorker.fetchRenderRamAvailableBytes(activeToken)
+                val latestRenderRam = MemorySyncWorker.fetchRenderRamPair(activeToken)
+                            renderRamAvailBytes = latestRenderRam.first
+                            renderRamTotalBytes = latestRenderRam.second
             }
             }
 
