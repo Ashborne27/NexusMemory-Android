@@ -167,7 +167,7 @@ fun NexusAutoScreen() {
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            "RAM Render : ${renderRamAvailBytes?.let { formatStorageBytes(it) } ?: "Non exposé (/api/storage)"}",
+                            "RAM Render : ${renderRamAvailBytes?.let { avail -> val totStr = renderRamTotalBytes?.let { \" / ${formatStorageBytes(it)} total\" } ?: \"\"; \"${formatStorageBytes(avail)} libre$totStr\" } ?: \"Non exposé (/api/storage)\"}",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
