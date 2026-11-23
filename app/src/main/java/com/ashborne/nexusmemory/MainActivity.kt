@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 var wifiActive by remember { mutableStateOf(false) }
-                var availRamMb by remember { mutableLongStateOf(wifiGuard.getAvailableRamMb()) }
+                var availRamMb by remember { mutableStateOf(wifiGuard.getAvailableRamMb()) }
                 var newPkgInput by remember { mutableStateOf("") }
 
                 val savedPackages = remember {
@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        items(savedPackages) { pkg ->
+                        items(items = savedPackages.toList()) { pkg: String ->
                             Button(
                                 onClick = { wifiGuard.openAppDetails(pkg) },
                                 modifier = Modifier.fillMaxWidth()
