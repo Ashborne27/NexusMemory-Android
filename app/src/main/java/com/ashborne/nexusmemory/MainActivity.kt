@@ -63,10 +63,15 @@ fun NexusAutoScreen() {
     var cloudItems by remember { mutableStateOf<List<CloudMemoryItem>>(emptyList()) }
     var previousPending by remember { mutableIntStateOf(-1) }
 
-    var hostAvailableBytes by remember {
-        mutableStateOf(MemorySyncWorker.getLocalAvailableBytes(context))
-    }
+    val initialHostStorage = remember { MemorySyncWorker.getLocalStoragePair(context) }
+    var hostAvailableBytes by remember { mutableStateOf(initialHostStorage.first) }
+    var hostTotalBytes by remember { mutableStateOf(initialHostStorage.second) }
     var renderAvailableBytes by remember { mutableStateOf<Long?>(null) }
+    val initialHostRam = remember { MemorySyncWorker.getLocalRamPair(context) }
+    var hostRamAvailBytes by remember { mutableStateOf(initialHostRam.first) }
+    var hostRamTotalBytes by remember { mutableStateOf(initialHostRam.second) }
+    var renderRamAvailBytes by remember { mutableStateOf<Long?>(null) }
+
 
 
     val dateFormatter = remember { SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()) }
@@ -75,9 +80,17 @@ fun NexusAutoScreen() {
         MemorySyncWorker.enqueue(context)
         val activeToken = CryptoVault.getToken(context)
 
-            hostAvailableBytes = MemorySyncWorker.getLocalAvailableBytes(context)
+            val latestHostStorage = MemorySyncWorker.getLocalStoragePair(context)
+            hostAvailableBytes = latestHostStorage.first
+            hostTotalBytes = latestHostStorage.second
             if (activeToken.isNotEmpty()) {
                 renderAvailableBytes = MemorySyncWorker.fetchRenderAvailableBytes(activeToken)
+            val latestHostRam = MemorySyncWorker.getLocalRamPair(context)
+            hostRamAvailBytes = latestHostRam.first
+            hostRamTotalBytes = latestHostRam.second
+            if (activeToken.isNotEmpty()) {
+                renderRamAvailBytes = MemorySyncWorker.fetchRenderRamAvailableBytes(activeToken)
+            }
             }
 
         if (activeToken.isNotEmpty()) {
@@ -139,11 +152,19 @@ fun NexusAutoScreen() {
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            "Appareil : ${formatStorageBytes(hostAvailableBytes)}",
+                            "Appareil : ${formatStorageBytes(hostAvailableBytes)} libre / ${formatStorageBytes(hostTotalBytes)} total",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
                             "Render : ${renderAvailableBytes?.let { formatStorageBytes(it) } ?: "Non exposé (/api/storage)"}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                                                Text(
+                            "RAM Appareil : ${formatStorageBytes(hostRamAvailBytes)} libre / ${formatStorageBytes(hostRamTotalBytes)} total",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "RAM Render : ${renderRamAvailBytes?.let { formatStorageBytes(it) } ?: "Non exposé (/api/storage)"}",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(

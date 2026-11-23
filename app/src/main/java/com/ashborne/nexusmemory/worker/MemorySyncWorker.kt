@@ -1,6 +1,8 @@
 package com.ashborne.nexusmemory.worker
 
 import android.content.Context
+import android.app.ActivityManager
+import android.os.Environment
 import android.os.StatFs
 import androidx.work.*
 import com.ashborne.nexusmemory.data.NexusDatabase
@@ -78,14 +80,58 @@ class MemorySyncWorker(
         private const val WORK_NAME = "nexus_memory_sync"
         private const val PERIODIC_WORK_NAME = "nexus_memory_periodic_sync"
 
-        fun getLocalAvailableBytes(context: Context): Long {
+        fun getLocalStoragePair(context: Context): Pair<Long, Long> {
             return try {
-                val stat = StatFs(context.filesDir.absolutePath)
-                stat.availableBytes
+                val stat = StatFs(Environment.getDataDirectory().path)
+                Pair(stat.availableBytes, stat.totalBytes)
             } catch (_: Exception) {
-                0L
+                Pair(0L, 0L)
             }
         }
+
+        fun getLocalRamPair(context: Context): Pair<Long, Long> {
+            return try {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val memInfo = ActivityManager.MemoryInfo()
+                am?.getMemoryInfo(memInfo)
+                Pair(memInfo.availMem, memInfo.totalMem)
+            } catch (_: Exception) {
+                Pair(0L, 0L)
+            }
+        }
+
+        suspend fun fetchRenderRamAvailableBytes(token: String): Long? = withContext(Dispatchers.IO) {
+            val http = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .build()
+
+            val reqBuilder = Request.Builder()
+                .url("https://nexus-memory-server.onrender.com/api/storage")
+                .get()
+
+            if (token.isNotEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+
+            return@withContext try {
+                http.newCall(reqBuilder.build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    val bodyStr = resp.body?.string().orEmpty()
+                    val root = JSONObject(bodyStr)
+                    if (root.has("ram_available_bytes")) {
+                        root.optLong("ram_available_bytes", -1L).takeIf { it >= 0L }
+                    } else {
+                        null
+                    }
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        fun getLocalAvailableBytes(context: Context): Long = getLocalStoragePair(context).first
+
 
         suspend fun fetchRenderAvailableBytes(token: String): Long? = withContext(Dispatchers.IO) {
             val http = OkHttpClient.Builder()
