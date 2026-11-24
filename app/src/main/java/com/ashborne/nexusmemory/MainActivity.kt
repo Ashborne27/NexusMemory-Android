@@ -1,9 +1,7 @@
 package com.ashborne.nexusmemory
 
-import android.app.ActivityManager
 import android.content.Context
 import android.os.Bundle
-import android.os.StatFs
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -19,25 +17,35 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val wifiGuard = WifiGuardHelper(this)
-        val prefs = getSharedPreferences("nexus_wifi_guard", Context.MODE_PRIVATE)
-        val defaultPackages = listOf("com.whatsapp", "com.mobizen.mobizen")
+        val prefs = getSharedPreferences("nexus_memory_prefs", Context.MODE_PRIVATE)
+        val defaultTargets = listOf("com.mobizen.mobizen")
+        val defaultProtected = listOf("com.whatsapp")
 
         setContent {
             MaterialTheme {
                 var wifiActive by remember { mutableStateOf(false) }
                 var availRamMb by remember { mutableStateOf(wifiGuard.getAvailableRamMb()) }
-                var newPkgInput by remember { mutableStateOf("") }
+                val totalRamMb = remember { wifiGuard.getTotalRamMb() }
+                var pkgInput by remember { mutableStateOf("") }
+                var keepSelected by remember { mutableStateOf(false) }
 
-                val savedPackages = remember {
+                val protectedPackages = remember {
                     mutableStateListOf<String>().apply {
-                        val extra = prefs.getStringSet("custom_packages", emptySet()) ?: emptySet()
-                        addAll((defaultPackages + extra).distinct())
+                        val saved = prefs.getStringSet("protected_pkgs", emptySet()) ?: emptySet()
+                        addAll((defaultProtected + saved).distinct())
+                    }
+                }
+
+                val targetPackages = remember {
+                    mutableStateListOf<String>().apply {
+                        val saved = prefs.getStringSet("target_pkgs", emptySet()) ?: emptySet()
+                        addAll((defaultTargets + saved).distinct())
                     }
                 }
 
                 DisposableEffect(Unit) {
-                    wifiGuard.startWatchingWifi { ramMb ->
-                        wifiActive = true
+                    wifiGuard.startWatchingWifi { isConnected, ramMb ->
+                        wifiActive = isConnected
                         availRamMb = ramMb
                     }
                     onDispose {
@@ -45,78 +53,93 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val dataDir = filesDir
-                val stat = StatFs(dataDir.absolutePath)
-                val freeStorageMb = stat.availableBytes / (1024 * 1024)
-                val totalStorageMb = stat.totalBytes / (1024 * 1024)
-
-                val actMgr = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-                val memInfo = ActivityManager.MemoryInfo()
-                actMgr.getMemoryInfo(memInfo)
-                val totalRamMb = memInfo.totalMem / (1024 * 1024)
-
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("NexusMemory Guard", style = MaterialTheme.typography.headlineSmall)
+                    Text("NexusMemory Standalone", style = MaterialTheme.typography.headlineSmall)
 
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text("État Wi-Fi : ${if (wifiActive) "Actif" else "En attente / Inactif"}")
-                            Text("RAM Appareil : $availRamMb Mo libre / $totalRamMb Mo total")
-                            Text("Stockage local : $freeStorageMb Mo libre / $totalStorageMb Mo total")
+                            Text("Wi-Fi : ${if (wifiActive) "Connecté" else "Inactif"}")
+                            Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                         }
                     }
+
+                    OutlinedTextField(
+                        value = pkgInput,
+                        onValueChange = { pkgInput = it },
+                        label = { Text("Nom de package (ex: com.exemple.app)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedTextField(
-                            value = newPkgInput,
-                            onValueChange = { newPkgInput = it },
-                            label = { Text("Ajouter package (ex: com.exemple.app)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
+                        FilterChip(
+                            selected = !keepSelected,
+                            onClick = { keepSelected = false },
+                            label = { Text("À cibler") }
+                        )
+                        FilterChip(
+                            selected = keepSelected,
+                            onClick = { keepSelected = true },
+                            label = { Text("À garder") }
                         )
                         Button(
                             onClick = {
-                                val pkg = newPkgInput.trim()
-                                if (pkg.isNotEmpty() && !savedPackages.contains(pkg)) {
-                                    savedPackages.add(pkg)
-                                    val currentExtra = prefs.getStringSet("custom_packages", emptySet())?.toMutableSet()
-                                        ?: mutableSetOf()
-                                    currentExtra.add(pkg)
-                                    prefs.edit().putStringSet("custom_packages", currentExtra).apply()
-                                    newPkgInput = ""
+                                val pkg = pkgInput.trim()
+                                if (pkg.isNotEmpty()) {
+                                    if (keepSelected) {
+                                        if (!protectedPackages.contains(pkg)) {
+                                            protectedPackages.add(pkg)
+                                            val set = (prefs.getStringSet("protected_pkgs", emptySet())
+                                                ?: emptySet()).toMutableSet().apply { add(pkg) }
+                                            prefs.edit().putStringSet("protected_pkgs", set).apply()
+                                        }
+                                    } else {
+                                        if (!targetPackages.contains(pkg)) {
+                                            targetPackages.add(pkg)
+                                            val set = (prefs.getStringSet("target_pkgs", emptySet())
+                                                ?: emptySet()).toMutableSet().apply { add(pkg) }
+                                            prefs.edit().putStringSet("target_pkgs", set).apply()
+                                        }
+                                    }
+                                    pkgInput = ""
                                 }
                             }
                         ) {
-                            Text("Ajouter")
+                            Text("Enregistrer")
                         }
                     }
 
-                    Text("Réglages rapides des applications", style = MaterialTheme.typography.titleMedium)
+                    Text("Applications ciblées (accès direct réglages)", style = MaterialTheme.typography.titleMedium)
 
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        items(items = savedPackages.toList()) { pkg: String ->
+                        items(items = targetPackages.toList()) { pkg: String ->
                             Button(
                                 onClick = { wifiGuard.openAppDetails(pkg) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Ouvrir réglages : $pkg")
+                                Text("Réglages : $pkg")
                             }
                         }
                     }
+
+                    Text(
+                        "Protégées (à garder) : ${protectedPackages.joinToString(", ")}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
