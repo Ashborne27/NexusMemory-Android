@@ -1,7 +1,15 @@
 package com.ashborne.nexusmemory
 
+import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -13,43 +21,86 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
+
+    private fun getRamInfoMb(): Pair<Long, Long> {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memInfo)
+        val availMb: Long = memInfo.availMem / (1024 * 1024)
+        val totalMb: Long = memInfo.totalMem / (1024 * 1024)
+        return Pair(availMb, totalMb)
+    }
+
+    private fun openAppSettings(packageName: String) {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val wifiGuard = WifiGuardHelper(this)
         val prefs = getSharedPreferences("nexus_memory_prefs", Context.MODE_PRIVATE)
-        val defaultTargets = listOf("com.mobizen.mobizen")
-        val defaultProtected = listOf("com.whatsapp")
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        val defaultTargets: List<String> = listOf("com.mobizen.mobizen")
+        val defaultProtected: List<String> = listOf("com.whatsapp")
 
         setContent {
             MaterialTheme {
-                var wifiActive by remember { mutableStateOf(false) }
-                var availRamMb by remember { mutableStateOf(wifiGuard.getAvailableRamMb()) }
-                val totalRamMb = remember { wifiGuard.getTotalRamMb() }
-                var pkgInput by remember { mutableStateOf("") }
-                var keepSelected by remember { mutableStateOf(false) }
+                val initialRam: Pair<Long, Long> = remember { getRamInfoMb() }
+                var wifiConnected: Boolean by remember { mutableStateOf<Boolean>(false) }
+                var availRamMb: Long by remember { mutableStateOf<Long>(initialRam.first) }
+                val totalRamMb: Long = initialRam.second
+                var pkgInput: String by remember { mutableStateOf<String>("") }
+                var keepSelected: Boolean by remember { mutableStateOf<Boolean>(false) }
 
                 val protectedPackages = remember {
                     mutableStateListOf<String>().apply {
-                        val saved = prefs.getStringSet("protected_pkgs", emptySet()) ?: emptySet()
+                        val saved: Set<String> =
+                            prefs.getStringSet("protected_pkgs", emptySet()) ?: emptySet()
                         addAll((defaultProtected + saved).distinct())
                     }
                 }
 
                 val targetPackages = remember {
                     mutableStateListOf<String>().apply {
-                        val saved = prefs.getStringSet("target_pkgs", emptySet()) ?: emptySet()
+                        val saved: Set<String> =
+                            prefs.getStringSet("target_pkgs", emptySet()) ?: emptySet()
                         addAll((defaultTargets + saved).distinct())
                     }
                 }
 
                 DisposableEffect(Unit) {
-                    wifiGuard.startWatchingWifi { isConnected, ramMb ->
-                        wifiActive = isConnected
-                        availRamMb = ramMb
+                    val request = NetworkRequest.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                        .build()
+
+                    val callback = object : ConnectivityManager.NetworkCallback() {
+                        override fun onAvailable(network: Network) {
+                            super.onAvailable(network)
+                            val currentRam: Pair<Long, Long> = getRamInfoMb()
+                            wifiConnected = true
+                            availRamMb = currentRam.first
+                        }
+
+                        override fun onLost(network: Network) {
+                            super.onLost(network)
+                            val currentRam: Pair<Long, Long> = getRamInfoMb()
+                            wifiConnected = false
+                            availRamMb = currentRam.first
+                        }
                     }
+
+                    connectivityManager.registerNetworkCallback(request, callback)
                     onDispose {
-                        wifiGuard.stopWatchingWifi()
+                        connectivityManager.unregisterNetworkCallback(callback)
                     }
                 }
 
@@ -59,21 +110,21 @@ class MainActivity : ComponentActivity() {
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("NexusMemory Standalone", style = MaterialTheme.typography.headlineSmall)
+                    Text("NexusMemory", style = MaterialTheme.typography.headlineSmall)
 
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text("Wi-Fi : ${if (wifiActive) "Connecté" else "Inactif"}")
+                            Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                             Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                         }
                     }
 
                     OutlinedTextField(
                         value = pkgInput,
-                        onValueChange = { pkgInput = it },
+                        onValueChange = { value: String -> pkgInput = value },
                         label = { Text("Nom de package (ex: com.exemple.app)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -95,20 +146,22 @@ class MainActivity : ComponentActivity() {
                         )
                         Button(
                             onClick = {
-                                val pkg = pkgInput.trim()
+                                val pkg: String = pkgInput.trim()
                                 if (pkg.isNotEmpty()) {
                                     if (keepSelected) {
                                         if (!protectedPackages.contains(pkg)) {
                                             protectedPackages.add(pkg)
-                                            val set = (prefs.getStringSet("protected_pkgs", emptySet())
-                                                ?: emptySet()).toMutableSet().apply { add(pkg) }
+                                            val set: MutableSet<String> =
+                                                (prefs.getStringSet("protected_pkgs", emptySet())
+                                                    ?: emptySet()).toMutableSet().apply { add(pkg) }
                                             prefs.edit().putStringSet("protected_pkgs", set).apply()
                                         }
                                     } else {
                                         if (!targetPackages.contains(pkg)) {
                                             targetPackages.add(pkg)
-                                            val set = (prefs.getStringSet("target_pkgs", emptySet())
-                                                ?: emptySet()).toMutableSet().apply { add(pkg) }
+                                            val set: MutableSet<String> =
+                                                (prefs.getStringSet("target_pkgs", emptySet())
+                                                    ?: emptySet()).toMutableSet().apply { add(pkg) }
                                             prefs.edit().putStringSet("target_pkgs", set).apply()
                                         }
                                     }
@@ -120,7 +173,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    Text("Applications ciblées (accès direct réglages)", style = MaterialTheme.typography.titleMedium)
+                    Text("Applications ciblées", style = MaterialTheme.typography.titleMedium)
 
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -128,7 +181,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         items(items = targetPackages.toList()) { pkg: String ->
                             Button(
-                                onClick = { wifiGuard.openAppDetails(pkg) },
+                                onClick = { openAppSettings(pkg) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Réglages : $pkg")
@@ -137,7 +190,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     Text(
-                        "Protégées (à garder) : ${protectedPackages.joinToString(", ")}",
+                        "À garder : ${protectedPackages.joinToString(", ")}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
