@@ -43,13 +43,13 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
-    private fun isUserInstalledApp(info: ApplicationInfo): Boolean {
+    private fun isCandidateApp(info: ApplicationInfo): Boolean {
         val isSystem: Boolean = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
         val isUpdatedSystem: Boolean = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-        return !isSystem && !isUpdatedSystem
+        return !isSystem || isUpdatedSystem
     }
 
-    private fun getUserAppsList(includeNonLauncher: Boolean): List<InstalledAppItem> {
+    private fun getAppsList(includeNonLauncher: Boolean): List<InstalledAppItem> {
         val pm: PackageManager = packageManager
         val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
 
         return appInfos
             .mapNotNull { info: ApplicationInfo ->
-                if (!isUserInstalledApp(info)) return@mapNotNull null
+                if (!isCandidateApp(info)) return@mapNotNull null
                 val pkg: String = info.packageName
                 if (pkg == packageName) return@mapNotNull null
                 val hasLauncher: Boolean = launcherPackages.contains(pkg)
@@ -112,10 +112,10 @@ class MainActivity : ComponentActivity() {
                 val totalRamMb: Long = initialRam.second
                 var searchQuery: String by remember { mutableStateOf<String>("") }
                 var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
-                var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(false) }
+                var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(true) }
 
                 val installedApps: List<InstalledAppItem> = remember(includeNonLauncher) {
-                    getUserAppsList(includeNonLauncher)
+                    getAppsList(includeNonLauncher)
                 }
 
                 val keptPackages = remember {
@@ -229,7 +229,7 @@ class MainActivity : ComponentActivity() {
                             onCheckedChange = { checked: Boolean -> includeNonLauncher = checked }
                         )
                         Text(
-                            text = "Inclure les apps installées sans icône lanceur",
+                            text = "Inclure les apps sans icône lanceur",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
