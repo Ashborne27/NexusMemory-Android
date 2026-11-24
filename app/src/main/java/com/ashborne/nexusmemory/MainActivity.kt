@@ -3,12 +3,14 @@ package com.ashborne.nexusmemory
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -26,7 +28,8 @@ import androidx.compose.ui.unit.dp
 
 data class InstalledAppItem(
     val appName: String,
-    val packageName: String
+    val packageName: String,
+    val isLauncherApp: Boolean
 )
 
 class MainActivity : ComponentActivity() {
@@ -40,18 +43,37 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
-    private fun getInstalledAppsList(): List<InstalledAppItem> {
+    private fun getAllAppsList(includeNonLauncher: Boolean): List<InstalledAppItem> {
         val pm: PackageManager = packageManager
-        val intent = Intent(Intent.ACTION_MAIN, null).apply {
+        val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        val resolveInfos = pm.queryIntentActivities(intent, 0)
-        return resolveInfos
-            .mapNotNull { info ->
-                val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+        val launcherPackages: Set<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(launcherIntent, 0)
+        }.mapNotNull { it.activityInfo?.packageName }.toSet()
+
+        val appInfos: List<ApplicationInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(0)
+        }
+
+        return appInfos
+            .mapNotNull { info: ApplicationInfo ->
+                val pkg: String = info.packageName
                 if (pkg == packageName) return@mapNotNull null
-                val label = info.loadLabel(pm)?.toString()?.trim().orEmpty().ifEmpty { pkg }
-                InstalledAppItem(appName = label, packageName = pkg)
+                val hasLauncher: Boolean = launcherPackages.contains(pkg)
+                if (!includeNonLauncher && !hasLauncher) return@mapNotNull null
+                val label: String = pm.getApplicationLabel(info)?.toString()?.trim().orEmpty().ifEmpty { pkg }
+                InstalledAppItem(
+                    appName = label,
+                    packageName = pkg,
+                    isLauncherApp = hasLauncher
+                )
             }
             .distinctBy { it.packageName }
             .sortedBy { it.appName.lowercase() }
@@ -83,8 +105,11 @@ class MainActivity : ComponentActivity() {
                 val totalRamMb: Long = initialRam.second
                 var searchQuery: String by remember { mutableStateOf<String>("") }
                 var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
+                var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(true) }
 
-                val installedApps: List<InstalledAppItem> = remember { getInstalledAppsList() }
+                val installedApps: List<InstalledAppItem> = remember(includeNonLauncher) {
+                    getAllAppsList(includeNonLauncher)
+                }
 
                 val keptPackages = remember {
                     mutableStateListOf<String>().apply {
@@ -158,7 +183,7 @@ class MainActivity : ComponentActivity() {
                             Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                             Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                             Text(
-                                "Gardées : ${keptPackages.size} | Non cochées (à arrêter) : $appsToStopCount",
+                                "Gardées : ${keptPackages.size} | Non cochées : $appsToStopCount",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
@@ -185,6 +210,20 @@ class MainActivity : ComponentActivity() {
                             selected = showOnlyChecked,
                             onClick = { showOnlyChecked = true },
                             label = { Text("Gardées (${keptPackages.size})") }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includeNonLauncher,
+                            onCheckedChange = { checked: Boolean -> includeNonLauncher = checked }
+                        )
+                        Text(
+                            text = "Inclure aussi les apps sans icône lanceur",
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
 
