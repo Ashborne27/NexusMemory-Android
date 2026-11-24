@@ -3,6 +3,7 @@ package com.ashborne.nexusmemory
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -12,13 +13,21 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+
+data class InstalledAppItem(
+    val appName: String,
+    val packageName: String
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -29,6 +38,23 @@ class MainActivity : ComponentActivity() {
         val availMb: Long = memInfo.availMem / (1024 * 1024)
         val totalMb: Long = memInfo.totalMem / (1024 * 1024)
         return Pair(availMb, totalMb)
+    }
+
+    private fun getInstalledAppsList(): List<InstalledAppItem> {
+        val pm: PackageManager = packageManager
+        val intent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfos = pm.queryIntentActivities(intent, 0)
+        return resolveInfos
+            .mapNotNull { info ->
+                val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+                if (pkg == packageName) return@mapNotNull null
+                val label = info.loadLabel(pm)?.toString()?.trim().orEmpty().ifEmpty { pkg }
+                InstalledAppItem(appName = label, packageName = pkg)
+            }
+            .distinctBy { it.packageName }
+            .sortedBy { it.appName.lowercase() }
     }
 
     private fun openAppSettings(packageName: String) {
@@ -49,32 +75,32 @@ class MainActivity : ComponentActivity() {
         val connectivityManager =
             getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-        val defaultTargets: List<String> = listOf("com.mobizen.mobizen")
-        val defaultProtected: List<String> = listOf("com.whatsapp")
-
         setContent {
             MaterialTheme {
                 val initialRam: Pair<Long, Long> = remember { getRamInfoMb() }
                 var wifiConnected: Boolean by remember { mutableStateOf<Boolean>(false) }
                 var availRamMb: Long by remember { mutableStateOf<Long>(initialRam.first) }
                 val totalRamMb: Long = initialRam.second
-                var pkgInput: String by remember { mutableStateOf<String>("") }
-                var keepSelected: Boolean by remember { mutableStateOf<Boolean>(false) }
+                var searchQuery: String by remember { mutableStateOf<String>("") }
+                var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
 
-                val protectedPackages = remember {
+                val installedApps: List<InstalledAppItem> = remember { getInstalledAppsList() }
+
+                val keptPackages = remember {
                     mutableStateListOf<String>().apply {
                         val saved: Set<String> =
-                            prefs.getStringSet("protected_pkgs", emptySet()) ?: emptySet()
-                        addAll((defaultProtected + saved).distinct())
+                            prefs.getStringSet("kept_packages", setOf("com.whatsapp")) ?: setOf("com.whatsapp")
+                        addAll(saved)
                     }
                 }
 
-                val targetPackages = remember {
-                    mutableStateListOf<String>().apply {
-                        val saved: Set<String> =
-                            prefs.getStringSet("target_pkgs", emptySet()) ?: emptySet()
-                        addAll((defaultTargets + saved).distinct())
+                fun toggleKept(pkg: String, checked: Boolean) {
+                    if (checked) {
+                        if (!keptPackages.contains(pkg)) keptPackages.add(pkg)
+                    } else {
+                        keptPackages.remove(pkg)
                     }
+                    prefs.edit().putStringSet("kept_packages", keptPackages.toSet()).apply()
                 }
 
                 DisposableEffect(Unit) {
@@ -104,11 +130,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, keptPackages.toList(), installedApps) {
+                    installedApps.filter { item ->
+                        val matchesQuery = searchQuery.isBlank() ||
+                            item.appName.contains(searchQuery.trim(), ignoreCase = true) ||
+                            item.packageName.contains(searchQuery.trim(), ignoreCase = true)
+                        val matchesFilter = !showOnlyChecked || keptPackages.contains(item.packageName)
+                        matchesQuery && matchesFilter
+                    }
+                }
+
+                val appsToStopCount: Int = installedApps.count { !keptPackages.contains(it.packageName) }
+
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text("NexusMemory", style = MaterialTheme.typography.headlineSmall)
 
@@ -119,13 +157,17 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                             Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
+                            Text(
+                                "Gardées : ${keptPackages.size} | Non cochées (à arrêter) : $appsToStopCount",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
 
                     OutlinedTextField(
-                        value = pkgInput,
-                        onValueChange = { value: String -> pkgInput = value },
-                        label = { Text("Nom de package (ex: com.exemple.app)") },
+                        value = searchQuery,
+                        onValueChange = { value: String -> searchQuery = value },
+                        label = { Text("Rechercher une application...") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -135,64 +177,63 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
-                            selected = !keepSelected,
-                            onClick = { keepSelected = false },
-                            label = { Text("À cibler") }
+                            selected = !showOnlyChecked,
+                            onClick = { showOnlyChecked = false },
+                            label = { Text("Toutes (${installedApps.size})") }
                         )
                         FilterChip(
-                            selected = keepSelected,
-                            onClick = { keepSelected = true },
-                            label = { Text("À garder") }
+                            selected = showOnlyChecked,
+                            onClick = { showOnlyChecked = true },
+                            label = { Text("Gardées (${keptPackages.size})") }
                         )
-                        Button(
-                            onClick = {
-                                val pkg: String = pkgInput.trim()
-                                if (pkg.isNotEmpty()) {
-                                    if (keepSelected) {
-                                        if (!protectedPackages.contains(pkg)) {
-                                            protectedPackages.add(pkg)
-                                            val set: MutableSet<String> =
-                                                (prefs.getStringSet("protected_pkgs", emptySet())
-                                                    ?: emptySet()).toMutableSet().apply { add(pkg) }
-                                            prefs.edit().putStringSet("protected_pkgs", set).apply()
-                                        }
-                                    } else {
-                                        if (!targetPackages.contains(pkg)) {
-                                            targetPackages.add(pkg)
-                                            val set: MutableSet<String> =
-                                                (prefs.getStringSet("target_pkgs", emptySet())
-                                                    ?: emptySet()).toMutableSet().apply { add(pkg) }
-                                            prefs.edit().putStringSet("target_pkgs", set).apply()
-                                        }
-                                    }
-                                    pkgInput = ""
-                                }
-                            }
-                        ) {
-                            Text("Enregistrer")
-                        }
                     }
-
-                    Text("Applications ciblées", style = MaterialTheme.typography.titleMedium)
 
                     LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        items(items = targetPackages.toList()) { pkg: String ->
-                            Button(
-                                onClick = { openAppSettings(pkg) },
-                                modifier = Modifier.fillMaxWidth()
+                        items(items = filteredApps, key = { it.packageName }) { app: InstalledAppItem ->
+                            val isKept: Boolean = keptPackages.contains(app.packageName)
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { toggleKept(app.packageName, !isKept) }
                             ) {
-                                Text("Réglages : $pkg")
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isKept,
+                                        onCheckedChange = { checked: Boolean ->
+                                            toggleKept(app.packageName, checked)
+                                        }
+                                    )
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = app.appName,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = app.packageName,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    if (!isKept) {
+                                        TextButton(onClick = { openAppSettings(app.packageName) }) {
+                                            Text("Réglages")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-
-                    Text(
-                        "À garder : ${protectedPackages.joinToString(", ")}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
         }
