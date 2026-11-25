@@ -41,17 +41,20 @@ class MainActivity : ComponentActivity() {
     private val blockedPackagePrefixes = listOf(
         "com.android.",
         "com.sec.",
+        "com.samsung.",
+        "com.google.android.",
         "org.chromium.webapk"
     )
 
-    private val blockedExactOrContains = listOf(
+    private val blockedKeywords = listOf(
+        "accessibilit",
+        "talkback",
         "captiveportallogin",
-        "com.google.android.gms",
-        "com.google.android.gsf",
-        "com.google.android.webview",
-        "com.google.android.inputmethod",
-        "com.samsung.android.provider",
-        "com.samsung.android.knox"
+        "webview",
+        "inputmethod",
+        "keyboard",
+        "permissioncontroller",
+        "packageinstaller"
     )
 
     private fun getRamInfoMb(): Pair<Long, Long> {
@@ -63,20 +66,26 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
-    private fun isAllowedApp(info: ApplicationInfo, hasLauncher: Boolean, includeNonLauncher: Boolean, ownPackage: String): Boolean {
+    private fun isTrueUserApp(
+        info: ApplicationInfo,
+        label: String,
+        hasLauncher: Boolean,
+        includeNonLauncher: Boolean,
+        ownPackage: String
+    ): Boolean {
         if (info.packageName == ownPackage) return true
+
         val pkgLower = info.packageName.lowercase()
+        val labelLower = label.lowercase()
+
         if (blockedPackagePrefixes.any { pkgLower.startsWith(it) }) return false
-        if (blockedExactOrContains.any { pkgLower.contains(it) }) return false
+        if (blockedKeywords.any { pkgLower.contains(it) || labelLower.contains(it) }) return false
 
         val isSystem: Boolean = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
         val isUpdatedSystem: Boolean = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        if (isSystem || isUpdatedSystem) return false
 
-        if (!isSystem && !isUpdatedSystem) {
-            return includeNonLauncher || hasLauncher
-        }
-
-        return if (includeNonLauncher) hasLauncher || isUpdatedSystem else hasLauncher
+        return includeNonLauncher || hasLauncher
     }
 
     private fun queryAllRawPackages(): List<ApplicationInfo> {
@@ -107,8 +116,8 @@ class MainActivity : ComponentActivity() {
             .mapNotNull { info: ApplicationInfo ->
                 val pkg: String = info.packageName
                 val hasLauncher: Boolean = launcherPackages.contains(pkg)
-                if (!isAllowedApp(info, hasLauncher, includeNonLauncher, packageName)) return@mapNotNull null
                 val label: String = pm.getApplicationLabel(info)?.toString()?.trim().orEmpty().ifEmpty { pkg }
+                if (!isTrueUserApp(info, label, hasLauncher, includeNonLauncher, packageName)) return@mapNotNull null
                 InstalledAppItem(
                     appName = label,
                     packageName = pkg,
@@ -260,185 +269,190 @@ class MainActivity : ComponentActivity() {
                     installedApps.filter { it.packageName != packageName && !keptPackages.contains(it.packageName) }
                 }
 
-                Column(
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("NexusMemory", style = MaterialTheme.typography.headlineSmall)
+                    item {
+                        Text("NexusMemory", style = MaterialTheme.typography.headlineSmall)
+                    }
 
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
-                            Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
-                            Text(
-                                "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Brut : $rawCount",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-
-                            Button(
-                                onClick = {
-                                    val pkgs = targetApps.map { it.packageName }
-                                    killBackgroundForTargets(pkgs)
-                                    availRamMb = getRamInfoMb().first
-                                    queuePackages = targetApps
-                                    queueIndex = 0
-                                    if (targetApps.isNotEmpty()) {
-                                        statusMessage = "Processus arrière-plan demandés (${pkgs.size}). File réglages : 1/${targetApps.size}"
-                                        openAppSettings(targetApps[0].packageName)
-                                    } else {
-                                        statusMessage = "Aucune application non cochée à traiter."
-                                    }
-                                },
-                                enabled = targetApps.isNotEmpty(),
-                                modifier = Modifier.fillMaxWidth()
+                    item {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text("Fermer les non cochées (${targetApps.size})")
-                            }
+                                Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
+                                Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
+                                Text(
+                                    "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Brut : $rawCount",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
 
-                            OutlinedButton(
-                                onClick = {
-                                    copyDiagnosticReport(includeNonLauncher)
-                                    statusMessage = "Rapport brut ($rawCount paquets) copié dans le presse-papiers."
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Copier diagnostic ($rawCount bruts)")
-                            }
+                                Button(
+                                    onClick = {
+                                        val pkgs = targetApps.map { it.packageName }
+                                        killBackgroundForTargets(pkgs)
+                                        availRamMb = getRamInfoMb().first
+                                        queuePackages = targetApps
+                                        queueIndex = 0
+                                        if (targetApps.isNotEmpty()) {
+                                            statusMessage = "Processus arrière-plan demandés (${pkgs.size}). File réglages : 1/${targetApps.size}"
+                                            openAppSettings(targetApps[0].packageName)
+                                        } else {
+                                            statusMessage = "Aucune application non cochée à traiter."
+                                        }
+                                    },
+                                    enabled = targetApps.isNotEmpty(),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Fermer les non cochées (${targetApps.size})")
+                                }
 
-                            if (queuePackages.isNotEmpty() && queueIndex < queuePackages.size) {
-                                val currentTarget = queuePackages[queueIndex]
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(
-                                        text = "File ${queueIndex + 1}/${queuePackages.size} : ${currentTarget.appName}",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = { advanceQueue(openNextSettings = true) },
-                                            modifier = Modifier.weight(1f)
+                                OutlinedButton(
+                                    onClick = {
+                                        copyDiagnosticReport(includeNonLauncher)
+                                        statusMessage = "Rapport brut ($rawCount paquets) copié dans le presse-papiers."
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Copier diagnostic ($rawCount bruts)")
+                                }
+
+                                if (queuePackages.isNotEmpty() && queueIndex < queuePackages.size) {
+                                    val currentTarget = queuePackages[queueIndex]
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "File ${queueIndex + 1}/${queuePackages.size} : ${currentTarget.appName}",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("Suivante")
-                                        }
-                                        OutlinedButton(
-                                            onClick = {
-                                                toggleKept(currentTarget.packageName, true)
-                                                advanceQueue(openNextSettings = false)
-                                            },
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Text("Garder")
-                                        }
-                                        TextButton(
-                                            onClick = {
-                                                queuePackages = emptyList()
-                                                queueIndex = 0
-                                                availRamMb = getRamInfoMb().first
-                                                statusMessage = "File arrêtée."
+                                            OutlinedButton(
+                                                onClick = { advanceQueue(openNextSettings = true) },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text("Suivante", maxLines = 1)
                                             }
-                                        ) {
-                                            Text("Stop")
+                                            OutlinedButton(
+                                                onClick = {
+                                                    toggleKept(currentTarget.packageName, true)
+                                                    advanceQueue(openNextSettings = false)
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text("Garder", maxLines = 1)
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    queuePackages = emptyList()
+                                                    queueIndex = 0
+                                                    availRamMb = getRamInfoMb().first
+                                                    statusMessage = "File arrêtée."
+                                                }
+                                            ) {
+                                                Text("Stop", maxLines = 1)
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            if (statusMessage.isNotBlank()) {
-                                Text(
-                                    text = statusMessage,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                if (statusMessage.isNotBlank()) {
+                                    Text(
+                                        text = statusMessage,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
                             }
                         }
                     }
 
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { value: String -> searchQuery = value },
-                        label = { Text("Rechercher une application...") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(
-                            selected = !showOnlyChecked,
-                            onClick = { showOnlyChecked = false },
-                            label = { Text("Installées (${installedApps.size})") }
-                        )
-                        FilterChip(
-                            selected = showOnlyChecked,
-                            onClick = { showOnlyChecked = true },
-                            label = { Text("Gardées (${keptPackages.size})") }
+                    item {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { value: String -> searchQuery = value },
+                            label = { Text("Rechercher une application...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = includeNonLauncher,
-                            onCheckedChange = { checked: Boolean -> includeNonLauncher = checked }
-                        )
-                        Text(
-                            text = "Inclure les apps sans icône lanceur",
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = !showOnlyChecked,
+                                onClick = { showOnlyChecked = false },
+                                label = { Text("Installées (${installedApps.size})") }
+                            )
+                            FilterChip(
+                                selected = showOnlyChecked,
+                                onClick = { showOnlyChecked = true },
+                                label = { Text("Gardées (${keptPackages.size})") }
+                            )
+                        }
                     }
 
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        items(items = filteredApps, key = { it.packageName }) { app: InstalledAppItem ->
-                            val isKept: Boolean = keptPackages.contains(app.packageName)
-                            Card(
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = includeNonLauncher,
+                                onCheckedChange = { checked: Boolean -> includeNonLauncher = checked }
+                            )
+                            Text(
+                                text = "Inclure les apps sans icône lanceur",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                    items(items = filteredApps, key = { it.packageName }) { app: InstalledAppItem ->
+                        val isKept: Boolean = keptPackages.contains(app.packageName)
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { toggleKept(app.packageName, !isKept) }
+                        ) {
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { toggleKept(app.packageName, !isKept) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(
-                                        checked = isKept,
-                                        onCheckedChange = { checked: Boolean ->
-                                            toggleKept(app.packageName, checked)
-                                        }
-                                    )
-                                    Column(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(horizontal = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = app.appName,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                        Text(
-                                            text = app.packageName,
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
+                                Checkbox(
+                                    checked = isKept,
+                                    onCheckedChange = { checked: Boolean ->
+                                        toggleKept(app.packageName, checked)
                                     }
-                                    if (!isKept && app.packageName != packageName) {
-                                        TextButton(onClick = { openAppSettings(app.packageName) }) {
-                                            Text("Réglages")
-                                        }
+                                )
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(horizontal = 8.dp)
+                                ) {
+                                    Text(
+                                        text = app.appName,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = app.packageName,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                if (!isKept && app.packageName != packageName) {
+                                    TextButton(onClick = { openAppSettings(app.packageName) }) {
+                                        Text("Réglages")
                                     }
                                 }
                             }
