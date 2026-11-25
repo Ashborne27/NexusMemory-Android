@@ -38,12 +38,20 @@ data class InstalledAppItem(
 
 class MainActivity : ComponentActivity() {
 
-    private val blockedSystemPrefixes = listOf(
+    private val blockedPackagePrefixes = listOf(
         "com.android.",
-        "com.google.android.",
         "com.sec.",
-        "com.samsung.",
         "org.chromium.webapk"
+    )
+
+    private val blockedExactOrContains = listOf(
+        "captiveportallogin",
+        "com.google.android.gms",
+        "com.google.android.gsf",
+        "com.google.android.webview",
+        "com.google.android.inputmethod",
+        "com.samsung.android.provider",
+        "com.samsung.android.knox"
     )
 
     private fun getRamInfoMb(): Pair<Long, Long> {
@@ -55,13 +63,20 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
-    private fun isStrictUserApp(info: ApplicationInfo, ownPackage: String): Boolean {
+    private fun isAllowedApp(info: ApplicationInfo, hasLauncher: Boolean, includeNonLauncher: Boolean, ownPackage: String): Boolean {
         if (info.packageName == ownPackage) return true
+        val pkgLower = info.packageName.lowercase()
+        if (blockedPackagePrefixes.any { pkgLower.startsWith(it) }) return false
+        if (blockedExactOrContains.any { pkgLower.contains(it) }) return false
+
         val isSystem: Boolean = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
         val isUpdatedSystem: Boolean = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-        if (isSystem || isUpdatedSystem) return false
-        val pkgLower = info.packageName.lowercase()
-        return blockedSystemPrefixes.none { pkgLower.startsWith(it) }
+
+        if (!isSystem && !isUpdatedSystem) {
+            return includeNonLauncher || hasLauncher
+        }
+
+        return if (includeNonLauncher) hasLauncher || isUpdatedSystem else hasLauncher
     }
 
     private fun queryAllRawPackages(): List<ApplicationInfo> {
@@ -90,10 +105,9 @@ class MainActivity : ComponentActivity() {
 
         val filtered = rawInfos
             .mapNotNull { info: ApplicationInfo ->
-                if (!isStrictUserApp(info, packageName)) return@mapNotNull null
                 val pkg: String = info.packageName
                 val hasLauncher: Boolean = launcherPackages.contains(pkg)
-                if (!includeNonLauncher && !hasLauncher) return@mapNotNull null
+                if (!isAllowedApp(info, hasLauncher, includeNonLauncher, packageName)) return@mapNotNull null
                 val label: String = pm.getApplicationLabel(info)?.toString()?.trim().orEmpty().ifEmpty { pkg }
                 InstalledAppItem(
                     appName = label,
@@ -160,7 +174,7 @@ class MainActivity : ComponentActivity() {
                 val totalRamMb: Long = initialRam.second
                 var searchQuery: String by remember { mutableStateOf<String>("") }
                 var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
-                var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(true) }
+                var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(false) }
 
                 var queuePackages: List<InstalledAppItem> by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
                 var queueIndex: Int by remember { mutableStateOf<Int>(0) }
