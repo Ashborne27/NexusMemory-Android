@@ -34,6 +34,14 @@ data class InstalledAppItem(
 
 class MainActivity : ComponentActivity() {
 
+    private val blockedSystemPrefixes = listOf(
+        "com.android.",
+        "com.google.android.",
+        "com.sec.",
+        "com.samsung.",
+        "org.chromium.webapk"
+    )
+
     private fun getRamInfoMb(): Pair<Long, Long> {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
@@ -43,10 +51,13 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
-    private fun isCandidateApp(info: ApplicationInfo): Boolean {
+    private fun isStrictUserApp(info: ApplicationInfo, ownPackage: String): Boolean {
+        if (info.packageName == ownPackage) return true
         val isSystem: Boolean = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
         val isUpdatedSystem: Boolean = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-        return !isSystem || isUpdatedSystem
+        if (isSystem || isUpdatedSystem) return false
+        val pkgLower = info.packageName.lowercase()
+        return blockedSystemPrefixes.none { pkgLower.startsWith(it) }
     }
 
     private fun getAppsList(includeNonLauncher: Boolean): List<InstalledAppItem> {
@@ -70,9 +81,8 @@ class MainActivity : ComponentActivity() {
 
         return appInfos
             .mapNotNull { info: ApplicationInfo ->
-                if (!isCandidateApp(info)) return@mapNotNull null
+                if (!isStrictUserApp(info, packageName)) return@mapNotNull null
                 val pkg: String = info.packageName
-                if (pkg == packageName) return@mapNotNull null
                 val hasLauncher: Boolean = launcherPackages.contains(pkg)
                 if (!includeNonLauncher && !hasLauncher) return@mapNotNull null
                 val label: String = pm.getApplicationLabel(info)?.toString()?.trim().orEmpty().ifEmpty { pkg }
@@ -136,8 +146,10 @@ class MainActivity : ComponentActivity() {
                 val keptPackages = remember {
                     mutableStateListOf<String>().apply {
                         val saved: Set<String> =
-                            prefs.getStringSet("kept_packages", setOf("com.whatsapp")) ?: setOf("com.whatsapp")
+                            prefs.getStringSet("kept_packages", setOf("com.whatsapp", packageName))
+                                ?: setOf("com.whatsapp", packageName)
                         addAll(saved)
+                        if (!contains(packageName)) add(packageName)
                     }
                 }
 
@@ -204,7 +216,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val targetApps: List<InstalledAppItem> = remember(installedApps, keptPackages.toList()) {
-                    installedApps.filter { !keptPackages.contains(it.packageName) }
+                    installedApps.filter { it.packageName != packageName && !keptPackages.contains(it.packageName) }
                 }
 
                 Column(
@@ -372,7 +384,7 @@ class MainActivity : ComponentActivity() {
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
-                                    if (!isKept) {
+                                    if (!isKept && app.packageName != packageName) {
                                         TextButton(onClick = { openAppSettings(app.packageName) }) {
                                             Text("Réglages")
                                         }
