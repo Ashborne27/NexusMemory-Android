@@ -38,14 +38,6 @@ data class InstalledAppItem(
 
 class MainActivity : ComponentActivity() {
 
-    private val blockedPackagePrefixes = listOf(
-        "com.android.",
-        "com.sec.",
-        "com.samsung.",
-        "com.google.android.",
-        "org.chromium.webapk"
-    )
-
     private val blockedKeywords = listOf(
         "accessibilit",
         "talkback",
@@ -54,7 +46,17 @@ class MainActivity : ComponentActivity() {
         "inputmethod",
         "keyboard",
         "permissioncontroller",
-        "packageinstaller"
+        "packageinstaller",
+        "overlay",
+        "carrierconfig",
+        "vending",
+        "googlequicksearchbox",
+        "android.gms",
+        "android.gsf",
+        "knox",
+        "emergencymode",
+        "systemui",
+        "providers."
     )
 
     private fun getRamInfoMb(): Pair<Long, Long> {
@@ -66,7 +68,7 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
-    private fun isTrueUserApp(
+    private fun isSelectableApp(
         info: ApplicationInfo,
         label: String,
         hasLauncher: Boolean,
@@ -77,15 +79,17 @@ class MainActivity : ComponentActivity() {
 
         val pkgLower = info.packageName.lowercase()
         val labelLower = label.lowercase()
-
-        if (blockedPackagePrefixes.any { pkgLower.startsWith(it) }) return false
         if (blockedKeywords.any { pkgLower.contains(it) || labelLower.contains(it) }) return false
 
         val isSystem: Boolean = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
         val isUpdatedSystem: Boolean = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-        if (isSystem || isUpdatedSystem) return false
 
-        return includeNonLauncher || hasLauncher
+        if (!isSystem && !isUpdatedSystem) {
+            return includeNonLauncher || hasLauncher
+        }
+
+        // Pour les apps système mises à jour : inclure si elles ont une icône lanceur
+        return if (isUpdatedSystem) hasLauncher else false
     }
 
     private fun queryAllRawPackages(): List<ApplicationInfo> {
@@ -117,7 +121,7 @@ class MainActivity : ComponentActivity() {
                 val pkg: String = info.packageName
                 val hasLauncher: Boolean = launcherPackages.contains(pkg)
                 val label: String = pm.getApplicationLabel(info)?.toString()?.trim().orEmpty().ifEmpty { pkg }
-                if (!isTrueUserApp(info, label, hasLauncher, includeNonLauncher, packageName)) return@mapNotNull null
+                if (!isSelectableApp(info, label, hasLauncher, includeNonLauncher, packageName)) return@mapNotNull null
                 InstalledAppItem(
                     appName = label,
                     packageName = pkg,
