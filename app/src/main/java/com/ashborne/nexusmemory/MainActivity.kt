@@ -248,6 +248,25 @@ class MainActivity : ComponentActivity() {
                     prefs.edit().putStringSet("kept_packages", keptPackages.toSet()).apply()
                 }
 
+                fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
+                    // Capturer l'ordre RAM décroissante AVANT killBackgroundProcesses
+                    val ordered = itemsToClose.sortedWith(
+                        compareByDescending<InstalledAppItem> { it.ramMb }
+                            .thenBy { it.appName.lowercase() }
+                    )
+                    val pkgs = ordered.map { it.packageName }
+                    killBackgroundForTargets(pkgs)
+                    availRamMb = getRamInfoMb().first
+                    queuePackages = ordered
+                    queueIndex = 0
+                    if (ordered.isNotEmpty()) {
+                        statusMessage = "$labelMode (${ordered.size} cibles). File : 1/${ordered.size}"
+                        openAppSettings(ordered[0].packageName)
+                    } else {
+                        statusMessage = "Aucune application à traiter dans ce mode."
+                    }
+                }
+
                 fun advanceQueue(openNextSettings: Boolean) {
                     val nextIdx = queueIndex + 1
                     if (nextIdx < queuePackages.size) {
@@ -310,6 +329,10 @@ class MainActivity : ComponentActivity() {
                         )
                 }
 
+                val activeHeavyTargets: List<InstalledAppItem> = remember(targetApps) {
+                    targetApps.filter { it.ramMb > 0L }
+                }
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -329,28 +352,24 @@ class MainActivity : ComponentActivity() {
                                 Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                                 Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                                 Text(
-                                    "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Brut : $rawCount",
+                                    "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Actives (>0 Mo) : ${activeHeavyTargets.size}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
 
                                 Button(
-                                    onClick = {
-                                        val pkgs = targetApps.map { it.packageName }
-                                        killBackgroundForTargets(pkgs)
-                                        availRamMb = getRamInfoMb().first
-                                        queuePackages = targetApps
-                                        queueIndex = 0
-                                        if (targetApps.isNotEmpty()) {
-                                            statusMessage = "Tri RAM décroissante (${pkgs.size} cibles). File : 1/${targetApps.size}"
-                                            openAppSettings(targetApps[0].packageName)
-                                        } else {
-                                            statusMessage = "Aucune application non cochée à traiter."
-                                        }
-                                    },
+                                    onClick = { startQueueWithItems(activeHeavyTargets, "Actives > 0 Mo") },
+                                    enabled = activeHeavyTargets.isNotEmpty(),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Fermer actives > 0 Mo (${activeHeavyTargets.size})")
+                                }
+
+                                OutlinedButton(
+                                    onClick = { startQueueWithItems(targetApps, "Toutes non cochées") },
                                     enabled = targetApps.isNotEmpty(),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("Fermer les non cochées (${targetApps.size})")
+                                    Text("Fermer toutes non cochées (${targetApps.size})")
                                 }
 
                                 OutlinedButton(
