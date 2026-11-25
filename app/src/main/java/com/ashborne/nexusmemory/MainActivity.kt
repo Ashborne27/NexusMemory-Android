@@ -70,6 +70,23 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
+    private fun isShizukuInstalled(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(
+                    "moe.shizuku.privileged.api",
+                    PackageManager.PackageInfoFlags.of(0L)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo("moe.shizuku.privileged.api", 0)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun getRunningRamByPackage(): Map<String, Long> {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val result = mutableMapOf<String, Long>()
@@ -210,6 +227,7 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("nexus_memory_prefs", Context.MODE_PRIVATE)
         val connectivityManager =
             getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val shizukuInstalled = isShizukuInstalled()
 
         setContent {
             MaterialTheme {
@@ -239,17 +257,36 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun saveKeptPackages() {
+                    prefs.edit().putStringSet("kept_packages", keptPackages.toSet()).apply()
+                }
+
                 fun toggleKept(pkg: String, checked: Boolean) {
                     if (checked) {
                         if (!keptPackages.contains(pkg)) keptPackages.add(pkg)
                     } else {
                         keptPackages.remove(pkg)
                     }
-                    prefs.edit().putStringSet("kept_packages", keptPackages.toSet()).apply()
+                    saveKeptPackages()
+                }
+
+                fun keepAllVisible(apps: List<InstalledAppItem>) {
+                    for (app in apps) {
+                        if (!keptPackages.contains(app.packageName)) {
+                            keptPackages.add(app.packageName)
+                        }
+                    }
+                    saveKeptPackages()
+                    statusMessage = "${apps.size} applications ajoutées à Gardées."
+                }
+
+                fun clearKeptPackages() {
+                    keptPackages.clear()
+                    saveKeptPackages()
+                    statusMessage = "Liste Gardées réinitialisée."
                 }
 
                 fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
-                    // Capturer l'ordre RAM décroissante AVANT killBackgroundProcesses
                     val ordered = itemsToClose.sortedWith(
                         compareByDescending<InstalledAppItem> { it.ramMb }
                             .thenBy { it.appName.lowercase() }
@@ -352,6 +389,10 @@ class MainActivity : ComponentActivity() {
                                 Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                                 Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                                 Text(
+                                    "Shizuku : ${if (shizukuInstalled) "Installé" else "Non installé"}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
                                     "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Actives (>0 Mo) : ${activeHeavyTargets.size}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -370,6 +411,24 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text("Fermer toutes non cochées (${targetApps.size})")
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { keepAllVisible(filteredApps) },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Tout garder", maxLines = 1)
+                                    }
+                                    TextButton(
+                                        onClick = { clearKeptPackages() },
+                                        enabled = keptPackages.isNotEmpty()
+                                    ) {
+                                        Text("Vider gardées", maxLines = 1)
+                                    }
                                 }
 
                                 OutlinedButton(
