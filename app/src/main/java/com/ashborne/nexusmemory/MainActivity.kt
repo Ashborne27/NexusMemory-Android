@@ -97,6 +97,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun killBackgroundForTargets(targetPackages: List<String>) {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        for (pkg in targetPackages) {
+            try {
+                @Suppress("DEPRECATION")
+                activityManager.killBackgroundProcesses(pkg)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -113,6 +124,10 @@ class MainActivity : ComponentActivity() {
                 var searchQuery: String by remember { mutableStateOf<String>("") }
                 var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
                 var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(true) }
+
+                var queuePackages: List<InstalledAppItem> by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
+                var queueIndex: Int by remember { mutableStateOf<Int>(0) }
+                var statusMessage: String by remember { mutableStateOf<String>("") }
 
                 val installedApps: List<InstalledAppItem> = remember(includeNonLauncher) {
                     getAppsList(includeNonLauncher)
@@ -133,6 +148,22 @@ class MainActivity : ComponentActivity() {
                         keptPackages.remove(pkg)
                     }
                     prefs.edit().putStringSet("kept_packages", keptPackages.toSet()).apply()
+                }
+
+                fun advanceQueue(openNextSettings: Boolean) {
+                    val nextIdx = queueIndex + 1
+                    if (nextIdx < queuePackages.size) {
+                        queueIndex = nextIdx
+                        if (openNextSettings) {
+                            openAppSettings(queuePackages[nextIdx].packageName)
+                        }
+                        statusMessage = "File réglages : ${nextIdx + 1}/${queuePackages.size}"
+                    } else {
+                        queuePackages = emptyList()
+                        queueIndex = 0
+                        availRamMb = getRamInfoMb().first
+                        statusMessage = "File terminée."
+                    }
                 }
 
                 DisposableEffect(Unit) {
@@ -172,7 +203,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val appsToStopCount: Int = installedApps.count { !keptPackages.contains(it.packageName) }
+                val targetApps: List<InstalledAppItem> = remember(installedApps, keptPackages.toList()) {
+                    installedApps.filter { !keptPackages.contains(it.packageName) }
+                }
 
                 Column(
                     modifier = Modifier
@@ -185,14 +218,82 @@ class MainActivity : ComponentActivity() {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                             Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                             Text(
-                                "Gardées : ${keptPackages.size} | Non cochées : $appsToStopCount",
+                                "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size}",
                                 style = MaterialTheme.typography.bodySmall
                             )
+
+                            Button(
+                                onClick = {
+                                    val pkgs = targetApps.map { it.packageName }
+                                    killBackgroundForTargets(pkgs)
+                                    availRamMb = getRamInfoMb().first
+                                    queuePackages = targetApps
+                                    queueIndex = 0
+                                    if (targetApps.isNotEmpty()) {
+                                        statusMessage = "Processus arrière-plan demandés (${pkgs.size}). File réglages : 1/${targetApps.size}"
+                                        openAppSettings(targetApps[0].packageName)
+                                    } else {
+                                        statusMessage = "Aucune application non cochée à traiter."
+                                    }
+                                },
+                                enabled = targetApps.isNotEmpty(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Fermer les non cochées (${targetApps.size})")
+                            }
+
+                            if (queuePackages.isNotEmpty() && queueIndex < queuePackages.size) {
+                                val currentTarget = queuePackages[queueIndex]
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(
+                                        text = "File ${queueIndex + 1}/${queuePackages.size} : ${currentTarget.appName}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { advanceQueue(openNextSettings = true) },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Suivante")
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                toggleKept(currentTarget.packageName, true)
+                                                advanceQueue(openNextSettings = false)
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Garder")
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                queuePackages = emptyList()
+                                                queueIndex = 0
+                                                availRamMb = getRamInfoMb().first
+                                                statusMessage = "File arrêtée."
+                                            }
+                                        ) {
+                                            Text("Stop")
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (statusMessage.isNotBlank()) {
+                                Text(
+                                    text = statusMessage,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
                     }
 
