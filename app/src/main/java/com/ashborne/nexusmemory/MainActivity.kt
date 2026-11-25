@@ -14,6 +14,7 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Debug
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -33,7 +34,8 @@ data class InstalledAppItem(
     val packageName: String,
     val isLauncherApp: Boolean,
     val isSystemFlag: Boolean,
-    val isUpdatedSystemFlag: Boolean
+    val isUpdatedSystemFlag: Boolean,
+    val ramMb: Long = 0L
 )
 
 class MainActivity : ComponentActivity() {
@@ -68,6 +70,32 @@ class MainActivity : ComponentActivity() {
         return Pair(availMb, totalMb)
     }
 
+    private fun getRunningRamByPackage(): Map<String, Long> {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val result = mutableMapOf<String, Long>()
+        try {
+            @Suppress("DEPRECATION")
+            val runningProcesses = activityManager.runningAppProcesses ?: emptyList()
+            val pids = runningProcesses.map { it.pid }.toIntArray()
+            if (pids.isNotEmpty()) {
+                val memInfos: Array<Debug.MemoryInfo> = activityManager.getProcessMemoryInfo(pids)
+                for (i in runningProcesses.indices) {
+                    val proc = runningProcesses[i]
+                    val pssKb = if (i < memInfos.size) memInfos[i].totalPss else 0
+                    val pssMb = (pssKb / 1024).toLong()
+                    for (pkg in proc.pkgList ?: emptyArray()) {
+                        val current = result[pkg] ?: 0L
+                        if (pssMb > current) {
+                            result[pkg] = pssMb
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return result
+    }
+
     private fun isSelectableApp(
         info: ApplicationInfo,
         label: String,
@@ -88,7 +116,6 @@ class MainActivity : ComponentActivity() {
             return includeNonLauncher || hasLauncher
         }
 
-        // Pour les apps système mises à jour : inclure si elles ont une icône lanceur
         return if (isUpdatedSystem) hasLauncher else false
     }
 
@@ -115,6 +142,7 @@ class MainActivity : ComponentActivity() {
         }.mapNotNull { it.activityInfo?.packageName }.toSet()
 
         val rawInfos: List<ApplicationInfo> = queryAllRawPackages()
+        val ramMap: Map<String, Long> = getRunningRamByPackage()
 
         val filtered = rawInfos
             .mapNotNull { info: ApplicationInfo ->
@@ -127,11 +155,15 @@ class MainActivity : ComponentActivity() {
                     packageName = pkg,
                     isLauncherApp = hasLauncher,
                     isSystemFlag = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
-                    isUpdatedSystemFlag = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                    isUpdatedSystemFlag = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0,
+                    ramMb = ramMap[pkg] ?: 0L
                 )
             }
             .distinctBy { it.packageName }
-            .sortedBy { it.appName.lowercase() }
+            .sortedWith(
+                compareByDescending<InstalledAppItem> { it.ramMb }
+                    .thenBy { it.appName.lowercase() }
+            )
 
         return Pair(filtered, rawInfos.distinctBy { it.packageName }.size)
     }
@@ -193,7 +225,7 @@ class MainActivity : ComponentActivity() {
                 var queueIndex: Int by remember { mutableStateOf<Int>(0) }
                 var statusMessage: String by remember { mutableStateOf<String>("") }
 
-                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher) {
+                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher, availRamMb) {
                     getAppsList(includeNonLauncher)
                 }
                 val installedApps: List<InstalledAppItem> = appsPair.first
@@ -270,7 +302,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val targetApps: List<InstalledAppItem> = remember(installedApps, keptPackages.toList()) {
-                    installedApps.filter { it.packageName != packageName && !keptPackages.contains(it.packageName) }
+                    installedApps
+                        .filter { it.packageName != packageName && !keptPackages.contains(it.packageName) }
+                        .sortedWith(
+                            compareByDescending<InstalledAppItem> { it.ramMb }
+                                .thenBy { it.appName.lowercase() }
+                        )
                 }
 
                 LazyColumn(
@@ -304,7 +341,7 @@ class MainActivity : ComponentActivity() {
                                         queuePackages = targetApps
                                         queueIndex = 0
                                         if (targetApps.isNotEmpty()) {
-                                            statusMessage = "Processus arrière-plan demandés (${pkgs.size}). File réglages : 1/${targetApps.size}"
+                                            statusMessage = "Tri RAM décroissante (${pkgs.size} cibles). File : 1/${targetApps.size}"
                                             openAppSettings(targetApps[0].packageName)
                                         } else {
                                             statusMessage = "Aucune application non cochée à traiter."
@@ -330,7 +367,7 @@ class MainActivity : ComponentActivity() {
                                     val currentTarget = queuePackages[queueIndex]
                                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Text(
-                                            text = "File ${queueIndex + 1}/${queuePackages.size} : ${currentTarget.appName}",
+                                            text = "File ${queueIndex + 1}/${queuePackages.size} : ${currentTarget.appName} (${currentTarget.ramMb} Mo)",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                         Row(
@@ -446,7 +483,7 @@ class MainActivity : ComponentActivity() {
                                         .padding(horizontal = 8.dp)
                                 ) {
                                     Text(
-                                        text = app.appName,
+                                        text = "${app.appName} (${app.ramMb} Mo)",
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
