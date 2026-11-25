@@ -1,6 +1,8 @@
 package com.ashborne.nexusmemory
 
 import android.app.ActivityManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -29,7 +31,9 @@ import androidx.compose.ui.unit.dp
 data class InstalledAppItem(
     val appName: String,
     val packageName: String,
-    val isLauncherApp: Boolean
+    val isLauncherApp: Boolean,
+    val isSystemFlag: Boolean,
+    val isUpdatedSystemFlag: Boolean
 )
 
 class MainActivity : ComponentActivity() {
@@ -60,26 +64,31 @@ class MainActivity : ComponentActivity() {
         return blockedSystemPrefixes.none { pkgLower.startsWith(it) }
     }
 
-    private fun getAppsList(includeNonLauncher: Boolean): List<InstalledAppItem> {
+    private fun queryAllRawPackages(): List<ApplicationInfo> {
+        val pm: PackageManager = packageManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(PackageManager.MATCH_ALL.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        }
+    }
+
+    private fun getAppsList(includeNonLauncher: Boolean): Pair<List<InstalledAppItem>, Int> {
         val pm: PackageManager = packageManager
         val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
         val launcherPackages: Set<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0L))
+            pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()))
         } else {
             @Suppress("DEPRECATION")
             pm.queryIntentActivities(launcherIntent, 0)
         }.mapNotNull { it.activityInfo?.packageName }.toSet()
 
-        val appInfos: List<ApplicationInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
-        }
+        val rawInfos: List<ApplicationInfo> = queryAllRawPackages()
 
-        return appInfos
+        val filtered = rawInfos
             .mapNotNull { info: ApplicationInfo ->
                 if (!isStrictUserApp(info, packageName)) return@mapNotNull null
                 val pkg: String = info.packageName
@@ -89,11 +98,29 @@ class MainActivity : ComponentActivity() {
                 InstalledAppItem(
                     appName = label,
                     packageName = pkg,
-                    isLauncherApp = hasLauncher
+                    isLauncherApp = hasLauncher,
+                    isSystemFlag = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                    isUpdatedSystemFlag = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
                 )
             }
             .distinctBy { it.packageName }
             .sortedBy { it.appName.lowercase() }
+
+        return Pair(filtered, rawInfos.distinctBy { it.packageName }.size)
+    }
+
+    private fun copyDiagnosticReport(includeNonLauncher: Boolean) {
+        val pm: PackageManager = packageManager
+        val rawInfos = queryAllRawPackages().distinctBy { it.packageName }.sortedBy { it.packageName.lowercase() }
+        val lines = rawInfos.map { info ->
+            val sys = if ((info.flags and ApplicationInfo.FLAG_SYSTEM) != 0) "SYS" else "USER"
+            val upd = if ((info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) "+UPD" else ""
+            val label = pm.getApplicationLabel(info)?.toString()?.trim().orEmpty()
+            "${info.packageName} | $label | $sys$upd"
+        }
+        val text = "Total brut (${rawInfos.size}), includeNonLauncher=$includeNonLauncher\n" + lines.joinToString("\n")
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("NexusMemory Diagnostic", text))
     }
 
     private fun openAppSettings(packageName: String) {
@@ -139,17 +166,17 @@ class MainActivity : ComponentActivity() {
                 var queueIndex: Int by remember { mutableStateOf<Int>(0) }
                 var statusMessage: String by remember { mutableStateOf<String>("") }
 
-                val installedApps: List<InstalledAppItem> = remember(includeNonLauncher) {
+                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher) {
                     getAppsList(includeNonLauncher)
                 }
+                val installedApps: List<InstalledAppItem> = appsPair.first
+                val rawCount: Int = appsPair.second
 
                 val keptPackages = remember {
                     mutableStateListOf<String>().apply {
                         val saved: Set<String> =
-                            prefs.getStringSet("kept_packages", setOf("com.whatsapp", packageName))
-                                ?: setOf("com.whatsapp", packageName)
+                            prefs.getStringSet("kept_packages", emptySet()) ?: emptySet()
                         addAll(saved)
-                        if (!contains(packageName)) add(packageName)
                     }
                 }
 
@@ -235,7 +262,7 @@ class MainActivity : ComponentActivity() {
                             Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                             Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                             Text(
-                                "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size}",
+                                "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Brut : $rawCount",
                                 style = MaterialTheme.typography.bodySmall
                             )
 
@@ -257,6 +284,16 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Fermer les non cochées (${targetApps.size})")
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    copyDiagnosticReport(includeNonLauncher)
+                                    statusMessage = "Rapport brut ($rawCount paquets) copié dans le presse-papiers."
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Copier diagnostic ($rawCount bruts)")
                             }
 
                             if (queuePackages.isNotEmpty() && queueIndex < queuePackages.size) {
