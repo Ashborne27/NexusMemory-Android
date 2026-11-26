@@ -48,6 +48,11 @@ class MainActivity : ComponentActivity() {
 
     private val shizukuPermissionRequestCode = 10042
 
+    private val neverForceStopPackages = setOf(
+        "moe.shizuku.privileged.api",
+        "com.termux"
+    )
+
     private val blockedKeywords = listOf(
         "accessibilit",
         "talkback",
@@ -68,6 +73,10 @@ class MainActivity : ComponentActivity() {
         "systemui",
         "providers."
     )
+
+    private fun isProtectedPackage(pkg: String): Boolean {
+        return pkg == packageName || neverForceStopPackages.contains(pkg)
+    }
 
     private fun getRamInfoMb(): Pair<Long, Long> {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -130,7 +139,7 @@ class MainActivity : ComponentActivity() {
         var successCount = 0
         var failCount = 0
         for (pkg in packages) {
-            if (pkg == packageName || pkg == "moe.shizuku.privileged.api") continue
+            if (isProtectedPackage(pkg)) continue
             try {
                 val proc = Shizuku.newProcess(arrayOf("sh", "-c", "am force-stop $pkg"), null, null)
                 val stderr = BufferedReader(InputStreamReader(proc.errorStream)).use { it.readText() }
@@ -273,6 +282,7 @@ class MainActivity : ComponentActivity() {
     private fun killBackgroundForTargets(targetPackages: List<String>) {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         for (pkg in targetPackages) {
+            if (isProtectedPackage(pkg)) continue
             try {
                 @Suppress("DEPRECATION")
                 activityManager.killBackgroundProcesses(pkg)
@@ -302,6 +312,8 @@ class MainActivity : ComponentActivity() {
 
                 var shizukuReady: Boolean by remember { mutableStateOf(hasShizukuPermissionSafe()) }
                 var isClosingAuto: Boolean by remember { mutableStateOf(false) }
+                var pendingConfirmItems: List<InstalledAppItem>? by remember { mutableStateOf(null) }
+                var pendingConfirmLabel: String by remember { mutableStateOf("") }
 
                 var queuePackages: List<InstalledAppItem> by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
                 var queueIndex: Int by remember { mutableStateOf<Int>(0) }
@@ -374,17 +386,19 @@ class MainActivity : ComponentActivity() {
                 fun clearKeptPackages() {
                     keptPackages.clear()
                     saveKeptPackages()
-                    statusMessage = "Liste Gardées réinitialisée."
+                    statusMessage = "Liste Gardées réinitialisée (paquets critiques toujours protégés)."
                 }
 
-                fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
-                    val ordered = itemsToClose.sortedWith(
-                        compareByDescending<InstalledAppItem> { it.ramMb }
-                            .thenBy { it.appName.lowercase() }
-                    )
+                fun executeStopQueue(itemsToClose: List<InstalledAppItem>, labelMode: String) {
+                    val ordered = itemsToClose
+                        .filter { !isProtectedPackage(it.packageName) }
+                        .sortedWith(
+                            compareByDescending<InstalledAppItem> { it.ramMb }
+                                .thenBy { it.appName.lowercase() }
+                        )
                     val pkgs = ordered.map { it.packageName }
                     if (ordered.isEmpty()) {
-                        statusMessage = "Aucune application à traiter dans ce mode."
+                        statusMessage = "Aucune application non protégée à traiter."
                         return
                     }
 
@@ -407,6 +421,21 @@ class MainActivity : ComponentActivity() {
                         queueIndex = 0
                         statusMessage = "$labelMode (${ordered.size} cibles). File réglages : 1/${ordered.size}"
                         openAppSettings(ordered[0].packageName)
+                    }
+                }
+
+                fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
+                    val safeList = itemsToClose.filter { !isProtectedPackage(it.packageName) }
+                    if (safeList.isEmpty()) {
+                        statusMessage = "Aucune application non protégée à traiter."
+                        return
+                    }
+                    refreshShizukuState()
+                    if (shizukuReady && safeList.size > 5) {
+                        pendingConfirmItems = safeList
+                        pendingConfirmLabel = labelMode
+                    } else {
+                        executeStopQueue(safeList, labelMode)
                     }
                 }
 
@@ -466,7 +495,7 @@ class MainActivity : ComponentActivity() {
 
                 val targetApps: List<InstalledAppItem> = remember(installedApps, keptPackages.toList()) {
                     installedApps
-                        .filter { it.packageName != packageName && it.packageName != "moe.shizuku.privileged.api" && !keptPackages.contains(it.packageName) }
+                        .filter { !isProtectedPackage(it.packageName) && !keptPackages.contains(it.packageName) }
                         .sortedWith(
                             compareByDescending<InstalledAppItem> { it.ramMb }
                                 .thenBy { it.appName.lowercase() }
@@ -475,6 +504,39 @@ class MainActivity : ComponentActivity() {
 
                 val activeHeavyTargets: List<InstalledAppItem> = remember(targetApps) {
                     targetApps.filter { it.ramMb > 0L }
+                }
+
+                if (pendingConfirmItems != null) {
+                    val toStop = pendingConfirmItems!!
+                    AlertDialog(
+                        onDismissRequest = { pendingConfirmItems = null },
+                        title = { Text("Confirmer am force-stop") },
+                        text = {
+                            val sampleNames = toStop.take(5).joinToString(", ") { it.appName }
+                            Text(
+                                "Arrêter immédiatement ${toStop.size} applications via Shizuku ?\n" +
+                                    "Exemples : $sampleNames\n" +
+                                    "NexusMemory, Shizuku et Termux sont protégés."
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    val itemsSnapshot = toStop
+                                    val labelSnapshot = pendingConfirmLabel
+                                    pendingConfirmItems = null
+                                    executeStopQueue(itemsSnapshot, labelSnapshot)
+                                }
+                            ) {
+                                Text("Arrêter (${toStop.size})")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { pendingConfirmItems = null }) {
+                                Text("Annuler")
+                            }
+                        }
+                    )
                 }
 
                 LazyColumn(
@@ -660,6 +722,7 @@ class MainActivity : ComponentActivity() {
 
                     items(items = filteredApps, key = { it.packageName }) { app: InstalledAppItem ->
                         val isKept: Boolean = keptPackages.contains(app.packageName)
+                        val isProtected = isProtectedPackage(app.packageName)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -687,11 +750,11 @@ class MainActivity : ComponentActivity() {
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
-                                        text = app.packageName,
+                                        text = if (isProtected) "${app.packageName} • Protégée" else app.packageName,
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
-                                if (!isKept && app.packageName != packageName && app.packageName != "moe.shizuku.privileged.api") {
+                                if (!isKept && !isProtected) {
                                     TextButton(onClick = { openAppSettings(app.packageName) }) {
                                         Text("Réglages")
                                     }
