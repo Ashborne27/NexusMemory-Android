@@ -28,11 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
 data class InstalledAppItem(
@@ -132,28 +127,6 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Throwable) {
         }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun forceStopPackagesViaShizuku(packages: List<String>): Pair<Int, Int> {
-        var successCount = 0
-        var failCount = 0
-        for (pkg in packages) {
-            if (isProtectedPackage(pkg)) continue
-            try {
-                val proc = Shizuku.newProcess(arrayOf("sh", "-c", "am force-stop $pkg"), null, null)
-                val stderr = BufferedReader(InputStreamReader(proc.errorStream)).use { it.readText() }
-                val exitCode = proc.waitFor()
-                if (exitCode == 0 && stderr.isBlank()) {
-                    successCount++
-                } else {
-                    failCount++
-                }
-            } catch (_: Throwable) {
-                failCount++
-            }
-        }
-        return Pair(successCount, failCount)
     }
 
     private fun getRunningRamByPackage(): Map<String, Long> {
@@ -301,7 +274,6 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                val coroutineScope = rememberCoroutineScope()
                 val initialRam: Pair<Long, Long> = remember { getRamInfoMb() }
                 var wifiConnected: Boolean by remember { mutableStateOf<Boolean>(false) }
                 var availRamMb: Long by remember { mutableStateOf<Long>(initialRam.first) }
@@ -311,7 +283,6 @@ class MainActivity : ComponentActivity() {
                 var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(false) }
 
                 var shizukuReady: Boolean by remember { mutableStateOf(hasShizukuPermissionSafe()) }
-                var isClosingAuto: Boolean by remember { mutableStateOf(false) }
                 var pendingConfirmItems: List<InstalledAppItem>? by remember { mutableStateOf(null) }
                 var pendingConfirmLabel: String by remember { mutableStateOf("") }
 
@@ -328,7 +299,7 @@ class MainActivity : ComponentActivity() {
                         if (requestCode == shizukuPermissionRequestCode) {
                             refreshShizukuState()
                             statusMessage = if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                                "Permission Shizuku accordée. Fermeture auto prête."
+                                "Permission Shizuku accordée. Binder prêt."
                             } else {
                                 "Permission Shizuku refusée."
                             }
@@ -403,25 +374,13 @@ class MainActivity : ComponentActivity() {
                     }
 
                     refreshShizukuState()
-                    if (shizukuReady && !isClosingAuto) {
-                        isClosingAuto = true
-                        statusMessage = "Fermeture auto Shizuku en cours (${pkgs.size} cibles)..."
-                        coroutineScope.launch {
-                            val (okCount, errCount) = withContext(Dispatchers.IO) {
-                                forceStopPackagesViaShizuku(pkgs)
-                            }
-                            availRamMb = getRamInfoMb().first
-                            isClosingAuto = false
-                            statusMessage = "$labelMode : $okCount arrêtées via Shizuku ($errCount ignorées/échec). RAM libre : $availRamMb Mo."
-                        }
-                    } else {
-                        killBackgroundForTargets(pkgs)
-                        availRamMb = getRamInfoMb().first
-                        queuePackages = ordered
-                        queueIndex = 0
-                        statusMessage = "$labelMode (${ordered.size} cibles). File réglages : 1/${ordered.size}"
-                        openAppSettings(ordered[0].packageName)
-                    }
+                    killBackgroundForTargets(pkgs)
+                    availRamMb = getRamInfoMb().first
+                    queuePackages = ordered
+                    queueIndex = 0
+                    val modeNote = if (shizukuReady) "Shizuku autorisé (UserService requis pour am force-stop)" else "File réglages"
+                    statusMessage = "$labelMode (${ordered.size} cibles) • $modeNote : 1/${ordered.size}"
+                    openAppSettings(ordered[0].packageName)
                 }
 
                 fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
@@ -431,7 +390,7 @@ class MainActivity : ComponentActivity() {
                         return
                     }
                     refreshShizukuState()
-                    if (shizukuReady && safeList.size > 5) {
+                    if (safeList.size > 5) {
                         pendingConfirmItems = safeList
                         pendingConfirmLabel = labelMode
                     } else {
@@ -510,11 +469,11 @@ class MainActivity : ComponentActivity() {
                     val toStop = pendingConfirmItems!!
                     AlertDialog(
                         onDismissRequest = { pendingConfirmItems = null },
-                        title = { Text("Confirmer am force-stop") },
+                        title = { Text("Confirmer le nettoyage") },
                         text = {
                             val sampleNames = toStop.take(5).joinToString(", ") { it.appName }
                             Text(
-                                "Arrêter immédiatement ${toStop.size} applications via Shizuku ?\n" +
+                                "Traiter ${toStop.size} applications ?\n" +
                                     "Exemples : $sampleNames\n" +
                                     "NexusMemory, Shizuku et Termux sont protégés."
                             )
@@ -528,7 +487,7 @@ class MainActivity : ComponentActivity() {
                                     executeStopQueue(itemsSnapshot, labelSnapshot)
                                 }
                             ) {
-                                Text("Arrêter (${toStop.size})")
+                                Text("Continuer (${toStop.size})")
                             }
                         },
                         dismissButton = {
@@ -558,7 +517,7 @@ class MainActivity : ComponentActivity() {
                                 Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                                 Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                                 val shizukuLabel = when {
-                                    shizukuReady -> "Shizuku : Auto ADB actif"
+                                    shizukuReady -> "Shizuku : Autorisé"
                                     isShizukuBinderReady() -> "Shizuku : Service actif (autorisation requise)"
                                     shizukuInstalled -> "Shizuku : Installé (démarrer Shizuku)"
                                     else -> "Shizuku : Non installé"
@@ -574,13 +533,13 @@ class MainActivity : ComponentActivity() {
                                         onClick = { requestShizukuPermissionSafe() },
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text("Autoriser Shizuku pour fermeture auto")
+                                        Text("Autoriser Shizuku")
                                     }
                                 }
 
                                 Button(
                                     onClick = { startQueueWithItems(activeHeavyTargets, "Actives > 0 Mo") },
-                                    enabled = activeHeavyTargets.isNotEmpty() && !isClosingAuto,
+                                    enabled = activeHeavyTargets.isNotEmpty(),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text("Fermer actives > 0 Mo (${activeHeavyTargets.size})")
@@ -588,13 +547,10 @@ class MainActivity : ComponentActivity() {
 
                                 OutlinedButton(
                                     onClick = { startQueueWithItems(targetApps, "Toutes non cochées") },
-                                    enabled = targetApps.isNotEmpty() && !isClosingAuto,
+                                    enabled = targetApps.isNotEmpty(),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(
-                                        if (shizukuReady) "Fermer auto toutes non cochées (${targetApps.size})"
-                                        else "Fermer toutes non cochées (${targetApps.size})"
-                                    )
+                                    Text("Fermer toutes non cochées (${targetApps.size})")
                                 }
 
                                 Row(
