@@ -51,7 +51,8 @@ class MainActivity : ComponentActivity() {
 
     private val neverForceStopPackages = setOf(
         "moe.shizuku.privileged.api",
-        "com.termux"
+        "com.termux",
+        "com.termux.boot"
     )
 
     private val blockedKeywords = listOf(
