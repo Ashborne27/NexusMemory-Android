@@ -620,7 +620,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, hideZeroRam, selectedPackages.toList(), installedApps) {
+                LaunchedEffect(wifiConnected) {
+                if (wifiConnected && shizukuReady && userService != null) {
+                    refreshTick++
+                }
+            }
+            val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, hideZeroRam, selectedPackages.toList(), installedApps) {
                     installedApps.filter { item ->
                         val matchesQuery = searchQuery.isBlank() ||
                             item.appName.contains(searchQuery.trim(), ignoreCase = true) ||
