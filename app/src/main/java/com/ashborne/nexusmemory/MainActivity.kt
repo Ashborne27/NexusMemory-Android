@@ -367,6 +367,7 @@ class MainActivity : ComponentActivity() {
                 var searchQuery: String by remember { mutableStateOf<String>("") }
                 var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
                 var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(false) }
+                var hideZeroRam: Boolean by remember { mutableStateOf<Boolean>(true) }
 
                 var shizukuBinderActive: Boolean by remember { mutableStateOf(isShizukuBinderReady()) }
                 var shizukuReady: Boolean by remember { mutableStateOf(hasShizukuPermissionSafe()) }
@@ -593,13 +594,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, selectedPackages.toList(), installedApps) {
+                val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, hideZeroRam, selectedPackages.toList(), installedApps) {
                     installedApps.filter { item ->
                         val matchesQuery = searchQuery.isBlank() ||
                             item.appName.contains(searchQuery.trim(), ignoreCase = true) ||
                             item.packageName.contains(searchQuery.trim(), ignoreCase = true)
                         val matchesFilter = !showOnlyChecked || selectedPackages.contains(item.packageName)
-                        matchesQuery && matchesFilter
+                        val matchesRam = !hideZeroRam || item.ramMb > 0L || selectedPackages.contains(item.packageName)
+                        matchesQuery && matchesFilter && matchesRam
                     }
                 }
 
@@ -855,18 +857,33 @@ class MainActivity : ComponentActivity() {
                     }
 
                     item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = includeNonLauncher,
-                                onCheckedChange = { checked: Boolean -> includeNonLauncher = checked }
-                            )
-                            Text(
-                                text = "Inclure les apps sans icône lanceur",
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = includeNonLauncher,
+                                    onCheckedChange = { checked: Boolean -> includeNonLauncher = checked }
+                                )
+                                Text(
+                                    text = "Inclure les apps sans icône lanceur",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = hideZeroRam,
+                                    onCheckedChange = { checked: Boolean -> hideZeroRam = checked }
+                                )
+                                Text(
+                                    text = "Masquer les apps à 0 Mo",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
                     }
 
