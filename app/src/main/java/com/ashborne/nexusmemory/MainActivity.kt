@@ -408,6 +408,19 @@ class MainActivity : ComponentActivity() {
                 }
 
                 DisposableEffect(Unit) {
+                    val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+                        refreshAllStates(manual = false)
+                    }
+                    val binderDeadListener = Shizuku.OnBinderDeadListener {
+                        serviceConnected = false
+                        shizukuBinderActive = false
+                        shizukuReady = false
+                    }
+                    try {
+                        Shizuku.addBinderReceivedListener(binderReceivedListener)
+                        Shizuku.addBinderDeadListener(binderDeadListener)
+                    } catch (_: Throwable) {
+                    }
                     val permListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
                         if (requestCode == shizukuPermissionRequestCode) {
                             refreshAllStates(manual = false)
@@ -426,6 +439,8 @@ class MainActivity : ComponentActivity() {
                     onDispose {
                         try {
                             Shizuku.removeRequestPermissionResultListener(permListener)
+                            Shizuku.removeBinderReceivedListener(binderReceivedListener)
+                            Shizuku.removeBinderDeadListener(binderDeadListener)
                         } catch (_: Throwable) {
                         }
                     }
@@ -748,7 +763,7 @@ class MainActivity : ComponentActivity() {
                                         enabled = selectedPackages.isNotEmpty(),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Tout décocher", maxLines = 1, softWrap = false)
+                                        Text("Décocher (${selectedPackages.size})", maxLines = 1, softWrap = false)
                                     }
                                     TextButton(
                                         onClick = {
