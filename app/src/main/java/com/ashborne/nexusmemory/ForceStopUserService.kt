@@ -38,29 +38,23 @@ class ForceStopUserService : IForceStopService.Stub() {
     override fun getRunningRamSummary(): String {
         val map = mutableMapOf<String, Long>()
         try {
-            val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", "dumpsys meminfo"))
+            val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", "ps -A -o RSS,NAME"))
             proc.inputStream.bufferedReader().useLines { lines ->
-                var currentPkg: String? = null
                 for (rawLine in lines) {
-                    val line = rawLine.trim()
-                    val markerIdx = line.indexOf("MEMINFO in pid ")
-                    if (markerIdx != -1) {
-                        val openBracket = line.indexOf('[', markerIdx)
-                        val closeBracket = line.indexOf(']', openBracket + 1)
-                        if (openBracket != -1 && closeBracket != -1) {
-                            currentPkg = line.substring(openBracket + 1, closeBracket).substringBefore(":")
+                    val trimmed = rawLine.trim()
+                    if (trimmed.isEmpty() || trimmed.startsWith("RSS")) continue
+                    val parts = trimmed.split(" ")
+                    val tokens = parts.filter { it.isNotEmpty() }
+                    if (tokens.size >= 2) {
+                        val rssKb = tokens[0].toLongOrNull() ?: 0L
+                        val procName = tokens.last().substringBefore(":")
+                        val mb = rssKb / 1024L
+                        if (mb > 0L && procName.contains(".")) {
+                            val prev = map[procName] ?: 0L
+                            if (mb > prev) {
+                                map[procName] = mb
+                            }
                         }
-                        continue
-                    }
-                    if (currentPkg != null && line.startsWith("TOTAL ")) {
-                        val parts = line.split(Regex("\\s+"))
-                        val kb = parts.getOrNull(1)?.toLongOrNull() ?: 0L
-                        val mb = kb / 1024L
-                        val prev = map[currentPkg] ?: 0L
-                        if (mb > prev) {
-                            map[currentPkg] = mb
-                        }
-                        currentPkg = null
                     }
                 }
             }
