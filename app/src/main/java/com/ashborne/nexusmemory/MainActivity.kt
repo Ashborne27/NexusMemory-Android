@@ -272,7 +272,23 @@ class MainActivity : ComponentActivity() {
         }.mapNotNull { it.activityInfo?.packageName }.toSet()
 
         val rawInfos: List<ApplicationInfo> = queryAllRawPackages()
-        val ramMap: Map<String, Long> = getRunningRamByPackage()
+        val ramMap: Map<String, Long> = remember(includeNonLauncher, availRamMb, refreshTick, serviceConnected) {
+                    val baseMap = getRunningRamByPackage().toMutableMap()
+                    if (shizukuReady && userService != null) {
+                        try {
+                            val svcMap = userService?.runningRamMapMb
+                            if (!svcMap.isNullOrEmpty()) {
+                                for ((k, v) in svcMap) {
+                                    if (v > (baseMap[k] ?: 0L)) {
+                                        baseMap[k] = v
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {
+                        }
+                    }
+                    baseMap
+                }
 
         val filtered = rawInfos
             .mapNotNull { info: ApplicationInfo ->
