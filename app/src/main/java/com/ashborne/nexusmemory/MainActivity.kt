@@ -377,6 +377,18 @@ class MainActivity : ComponentActivity() {
                 var shizukuBinderActive: Boolean by remember { mutableStateOf(isShizukuBinderReady()) }
                 var shizukuReady: Boolean by remember { mutableStateOf(hasShizukuPermissionSafe()) }
                 var serviceConnected: Boolean by remember { mutableStateOf(userService != null) }
+
+                LaunchedEffect(wifiConnected, shizukuReady, serviceConnected) {
+                    if (shizukuReady && !serviceConnected) {
+                        try {
+                            ensureUserServiceBound()
+                        } catch (_: Throwable) {
+                        }
+                    }
+                    if (wifiConnected && shizukuReady) {
+                        refreshTick++
+                    }
+                }
                 var isStoppingAuto: Boolean by remember { mutableStateOf(false) }
                 var pendingConfirmItems: List<InstalledAppItem>? by remember { mutableStateOf(null) }
                 var pendingConfirmLabel: String by remember { mutableStateOf("") }
