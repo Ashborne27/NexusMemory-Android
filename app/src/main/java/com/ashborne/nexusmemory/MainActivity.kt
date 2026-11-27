@@ -959,4 +959,15 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+private fun applyZeroRamFilter(
+    apps: List<InstalledAppItem>,
+    hideZeroRam: Boolean,
+    selectedPackages: Set<String>
+): List<InstalledAppItem> {
+    if (!hideZeroRam) return apps
+    return apps.filter { item ->
+        item.ramMb > 0L || selectedPackages.contains(item.packageName)
+    }
+}
 }
