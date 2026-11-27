@@ -620,7 +620,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(wifiConnected) {
+                LaunchedEffect(wifiConnected, shizukuReady) {
+                if (shizukuReady && userService == null) {
+                    try {
+                        bindForceStopService()
+                    } catch (_: Throwable) {
+                    }
+                }
                 if (wifiConnected && shizukuReady && userService != null) {
                     refreshTick++
                 }
