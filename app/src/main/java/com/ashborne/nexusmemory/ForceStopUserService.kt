@@ -35,7 +35,7 @@ class ForceStopUserService : IForceStopService.Stub() {
         exitProcess(0)
     }
 
-    override fun getRunningRamMapMb(): Map<String, Long> {
+    override fun getRunningRamSummary(): String {
         val map = mutableMapOf<String, Long>()
         try {
             val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", "dumpsys meminfo"))
@@ -67,6 +67,6 @@ class ForceStopUserService : IForceStopService.Stub() {
             proc.waitFor()
         } catch (_: Throwable) {
         }
-        return map
+        return map.entries.joinToString(",") { "${it.key}=${it.value}" }
     }
 }

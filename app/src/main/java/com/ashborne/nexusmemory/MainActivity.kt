@@ -259,7 +259,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun getAppsList(includeNonLauncher: Boolean): Pair<List<InstalledAppItem>, Int> {
+    private fun getAppsList(includeNonLauncher: Boolean, extraRamMap: Map<String, Long> = emptyMap()): Pair<List<InstalledAppItem>, Int> {
         val pm: PackageManager = packageManager
         val launcherIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -272,23 +272,12 @@ class MainActivity : ComponentActivity() {
         }.mapNotNull { it.activityInfo?.packageName }.toSet()
 
         val rawInfos: List<ApplicationInfo> = queryAllRawPackages()
-        val ramMap: Map<String, Long> = remember(includeNonLauncher, availRamMb, refreshTick, serviceConnected) {
-                    val baseMap = getRunningRamByPackage().toMutableMap()
-                    if (shizukuReady && userService != null) {
-                        try {
-                            val svcMap = userService?.runningRamMapMb
-                            if (!svcMap.isNullOrEmpty()) {
-                                for ((k, v) in svcMap) {
-                                    if (v > (baseMap[k] ?: 0L)) {
-                                        baseMap[k] = v
-                                    }
-                                }
-                            }
-                        } catch (_: Throwable) {
-                        }
-                    }
-                    baseMap
-                }
+        val ramMap: MutableMap<String, Long> = getRunningRamByPackage().toMutableMap()
+        for ((pkg, mb) in extraRamMap) {
+            if (mb > (ramMap[pkg] ?: 0L)) {
+                ramMap[pkg] = mb
+            }
+        }
 
         val filtered = rawInfos
             .mapNotNull { info: ApplicationInfo ->
@@ -463,8 +452,29 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher, availRamMb, refreshTick) {
-                    getAppsList(includeNonLauncher)
+                val shizukuRamMap: Map<String, Long> = remember(availRamMb, refreshTick, serviceConnected, shizukuReady) {
+                    val parsed = mutableMapOf<String, Long>()
+                    if (shizukuReady && userService != null) {
+                        try {
+                            val raw = userService?.runningRamSummary.orEmpty()
+                            for (entry in raw.split(",")) {
+                                val eqIdx = entry.indexOf('=')
+                                if (eqIdx > 0) {
+                                    val pkg = entry.substring(0, eqIdx).trim()
+                                    val mb = entry.substring(eqIdx + 1).trim().toLongOrNull() ?: 0L
+                                    if (pkg.isNotEmpty() && mb > (parsed[pkg] ?: 0L)) {
+                                        parsed[pkg] = mb
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {
+                        }
+                    }
+                    parsed
+                }
+
+                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher, availRamMb, refreshTick, shizukuRamMap) {
+                    getAppsList(includeNonLauncher, shizukuRamMap)
                 }
                 val installedApps: List<InstalledAppItem> = appsPair.first
                 val rawCount: Int = appsPair.second
