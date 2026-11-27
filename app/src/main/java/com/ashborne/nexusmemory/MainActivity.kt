@@ -763,7 +763,7 @@ class MainActivity : ComponentActivity() {
                                         enabled = selectedPackages.isNotEmpty(),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Décocher (${selectedPackages.size})", maxLines = 1, softWrap = false)
+                                        Text("Vider (${selectedPackages.size})", maxLines = 1, softWrap = false)
                                     }
                                     TextButton(
                                         onClick = {
@@ -771,7 +771,7 @@ class MainActivity : ComponentActivity() {
                                             statusMessage = "Rapport brut ($rawCount paquets) copié dans le presse-papiers."
                                         }
                                     ) {
-                                        Text("Diagnostic ($rawCount)", maxLines = 1, softWrap = false)
+                                        Text("Log ($rawCount)", maxLines = 1, softWrap = false)
                                     }
                                 }
 
