@@ -374,6 +374,7 @@ class MainActivity : ComponentActivity() {
                 var isStoppingAuto: Boolean by remember { mutableStateOf(false) }
                 var pendingConfirmItems: List<InstalledAppItem>? by remember { mutableStateOf(null) }
                 var pendingConfirmLabel: String by remember { mutableStateOf("") }
+                var pendingUncheckStopped: Boolean by remember { mutableStateOf(false) }
 
                 var queuePackages: List<InstalledAppItem> by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
                 var queueIndex: Int by remember { mutableStateOf<Int>(0) }
@@ -463,7 +464,11 @@ class MainActivity : ComponentActivity() {
                     statusMessage = "Sélection vidée."
                 }
 
-                fun executeStopQueue(itemsToClose: List<InstalledAppItem>, labelMode: String) {
+                fun executeStopQueue(
+                    itemsToClose: List<InstalledAppItem>,
+                    labelMode: String,
+                    uncheckStopped: Boolean
+                ) {
                     val ordered = itemsToClose
                         .filter { !isProtectedPackage(it.packageName) }
                         .sortedWith(
@@ -472,14 +477,14 @@ class MainActivity : ComponentActivity() {
                         )
                     val pkgs = ordered.map { it.packageName }
                     if (ordered.isEmpty()) {
-                        statusMessage = "Aucune application non protégée cochée."
+                        statusMessage = "Aucune application non protégée à fermer."
                         return
                     }
 
                     refreshAllStates(manual = false)
                     if (shizukuReady && userService != null && !isStoppingAuto) {
                         isStoppingAuto = true
-                        statusMessage = "Arrêt forcé des ${pkgs.size} apps cochées via Shizuku..."
+                        statusMessage = "Arrêt forcé de ${pkgs.size} apps via Shizuku..."
                         coroutineScope.launch {
                             val result = withContext(Dispatchers.IO) {
                                 forceStopViaUserService(pkgs)
@@ -487,15 +492,17 @@ class MainActivity : ComponentActivity() {
                             isStoppingAuto = false
                             if (result != null) {
                                 val (stoppedList, errCount) = result
-                                selectedPackages.removeAll(stoppedList.toSet())
-                                saveSelectedPackages()
+                                if (uncheckStopped) {
+                                    selectedPackages.removeAll(stoppedList.toSet())
+                                    saveSelectedPackages()
+                                }
                                 refreshAllStates(manual = false)
                                 statusMessage = "$labelMode : ${stoppedList.size} arrêtées via am force-stop ($errCount échec). RAM libre : $availRamMb Mo."
                             } else {
                                 killBackgroundForTargets(pkgs)
                                 queuePackages = ordered
                                 queueIndex = 0
-                                statusMessage = "Service indisponible : repli file réglages (${ordered.size} cochées)."
+                                statusMessage = "Service indisponible : repli file réglages (${ordered.size} cibles)."
                                 openAppSettings(ordered[0].packageName)
                             }
                         }
@@ -505,23 +512,28 @@ class MainActivity : ComponentActivity() {
                         queuePackages = ordered
                         queueIndex = 0
                         val hint = if (shizukuReady) "Liaison service en cours..." else "File réglages"
-                        statusMessage = "$labelMode (${ordered.size} cochées) • $hint : 1/${ordered.size}"
+                        statusMessage = "$labelMode (${ordered.size} cibles) • $hint : 1/${ordered.size}"
                         openAppSettings(ordered[0].packageName)
                     }
                 }
 
-                fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
+                fun startQueueWithItems(
+                    itemsToClose: List<InstalledAppItem>,
+                    labelMode: String,
+                    uncheckStopped: Boolean
+                ) {
                     val safeList = itemsToClose.filter { !isProtectedPackage(it.packageName) }
                     if (safeList.isEmpty()) {
-                        statusMessage = "Aucune application non protégée cochée."
+                        statusMessage = "Aucune application non protégée à traiter."
                         return
                     }
                     refreshAllStates(manual = false)
                     if (shizukuReady && userService != null && safeList.size > 5) {
                         pendingConfirmItems = safeList
                         pendingConfirmLabel = labelMode
+                        pendingUncheckStopped = uncheckStopped
                     } else {
-                        executeStopQueue(safeList, labelMode)
+                        executeStopQueue(safeList, labelMode, uncheckStopped)
                     }
                 }
 
@@ -585,6 +597,15 @@ class MainActivity : ComponentActivity() {
                         )
                 }
 
+                val uncheckedTargets: List<InstalledAppItem> = remember(installedApps, selectedPackages.toList()) {
+                    installedApps
+                        .filter { !selectedPackages.contains(it.packageName) && !isProtectedPackage(it.packageName) }
+                        .sortedWith(
+                            compareByDescending<InstalledAppItem> { it.ramMb }
+                                .thenBy { it.appName.lowercase() }
+                        )
+                }
+
                 if (pendingConfirmItems != null) {
                     val toStop = pendingConfirmItems!!
                     AlertDialog(
@@ -593,9 +614,8 @@ class MainActivity : ComponentActivity() {
                         text = {
                             val sampleNames = toStop.take(5).joinToString(", ") { it.appName }
                             Text(
-                                "Fermer uniquement les ${toStop.size} applications cochées via Shizuku ?\n" +
-                                    "Cibles : $sampleNames\n" +
-                                    "Les applications non cochées resteront intactes."
+                                "Arrêter ${toStop.size} applications via Shizuku ?\n" +
+                                    "Exemples : $sampleNames"
                             )
                         },
                         confirmButton = {
@@ -603,11 +623,12 @@ class MainActivity : ComponentActivity() {
                                 onClick = {
                                     val itemsSnapshot = toStop
                                     val labelSnapshot = pendingConfirmLabel
+                                    val uncheckSnapshot = pendingUncheckStopped
                                     pendingConfirmItems = null
-                                    executeStopQueue(itemsSnapshot, labelSnapshot)
+                                    executeStopQueue(itemsSnapshot, labelSnapshot, uncheckSnapshot)
                                 }
                             ) {
-                                Text("Fermer (${toStop.size})")
+                                Text("Arrêter (${toStop.size})")
                             }
                         },
                         dismissButton = {
@@ -654,7 +675,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Text(shizukuLabel, style = MaterialTheme.typography.bodySmall)
                                 Text(
-                                    "Cochées à fermer : ${checkedTargets.size}",
+                                    "Cochées : ${checkedTargets.size} | Non cochées : ${uncheckedTargets.size}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
 
@@ -685,13 +706,36 @@ class MainActivity : ComponentActivity() {
                                 }
 
                                 Button(
-                                    onClick = { startQueueWithItems(checkedTargets, "Sélection cochée") },
+                                    onClick = {
+                                        startQueueWithItems(
+                                            checkedTargets,
+                                            "Apps cochées",
+                                            uncheckStopped = true
+                                        )
+                                    },
                                     enabled = checkedTargets.isNotEmpty() && !isStoppingAuto,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text(
-                                        if (shizukuReady && serviceConnected) "Fermer auto sélectionnées (${checkedTargets.size})"
-                                        else "Fermer sélectionnées (${checkedTargets.size})"
+                                        if (shizukuReady && serviceConnected) "Fermer auto cochées (${checkedTargets.size})"
+                                        else "Fermer cochées (${checkedTargets.size})"
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        startQueueWithItems(
+                                            uncheckedTargets,
+                                            "Apps non cochées",
+                                            uncheckStopped = false
+                                        )
+                                    },
+                                    enabled = uncheckedTargets.isNotEmpty() && !isStoppingAuto,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        if (shizukuReady && serviceConnected) "Fermer auto non cochées (${uncheckedTargets.size})"
+                                        else "Fermer non cochées (${uncheckedTargets.size})"
                                     )
                                 }
 
