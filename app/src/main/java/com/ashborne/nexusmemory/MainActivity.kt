@@ -31,6 +31,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -131,6 +134,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openShizukuApp() {
+        try {
+            val launchIntent = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(launchIntent)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun isShizukuBinderReady(): Boolean {
         return try {
             Shizuku.pingBinder()
@@ -170,20 +184,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun forceStopViaUserService(packages: List<String>): Pair<Int, Int>? {
+    private fun forceStopViaUserService(packages: List<String>): Pair<List<String>, Int>? {
         val svc = userService ?: return null
-        var ok = 0
+        val stopped = mutableListOf<String>()
         var err = 0
         for (pkg in packages) {
             if (isProtectedPackage(pkg)) continue
             try {
                 val res = svc.forceStopPackage(pkg)
-                if (res == 0) ok++ else err++
+                if (res == 0) stopped.add(pkg) else err++
             } catch (_: Throwable) {
                 err++
             }
         }
-        return Pair(ok, err)
+        return Pair(stopped, err)
     }
 
     private fun getRunningRamByPackage(): Map<String, Long> {
@@ -344,15 +358,19 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 val coroutineScope = rememberCoroutineScope()
+                val lifecycleOwner = LocalLifecycleOwner.current
                 val initialRam: Pair<Long, Long> = remember { getRamInfoMb() }
                 var wifiConnected: Boolean by remember { mutableStateOf<Boolean>(false) }
                 var availRamMb: Long by remember { mutableStateOf<Long>(initialRam.first) }
                 val totalRamMb: Long = initialRam.second
+                var refreshTick: Int by remember { mutableStateOf<Int>(0) }
                 var searchQuery: String by remember { mutableStateOf<String>("") }
                 var showOnlyChecked: Boolean by remember { mutableStateOf<Boolean>(false) }
                 var includeNonLauncher: Boolean by remember { mutableStateOf<Boolean>(false) }
 
+                var shizukuBinderActive: Boolean by remember { mutableStateOf(isShizukuBinderReady()) }
                 var shizukuReady: Boolean by remember { mutableStateOf(hasShizukuPermissionSafe()) }
+                var serviceConnected: Boolean by remember { mutableStateOf(userService != null) }
                 var isStoppingAuto: Boolean by remember { mutableStateOf(false) }
                 var pendingConfirmItems: List<InstalledAppItem>? by remember { mutableStateOf(null) }
                 var pendingConfirmLabel: String by remember { mutableStateOf("") }
@@ -361,17 +379,37 @@ class MainActivity : ComponentActivity() {
                 var queueIndex: Int by remember { mutableStateOf<Int>(0) }
                 var statusMessage: String by remember { mutableStateOf<String>("") }
 
-                fun refreshShizukuState() {
+                fun refreshAllStates(manual: Boolean = false) {
+                    val ramNow = getRamInfoMb()
+                    availRamMb = ramNow.first
+                    shizukuBinderActive = isShizukuBinderReady()
                     shizukuReady = hasShizukuPermissionSafe()
                     if (shizukuReady) {
                         ensureUserServiceBound()
+                    }
+                    serviceConnected = userService != null
+                    refreshTick++
+                    if (manual) {
+                        statusMessage = "Actualisé • RAM libre : $availRamMb Mo"
+                    }
+                }
+
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            refreshAllStates(manual = false)
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
                     }
                 }
 
                 DisposableEffect(Unit) {
                     val permListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
                         if (requestCode == shizukuPermissionRequestCode) {
-                            refreshShizukuState()
+                            refreshAllStates(manual = false)
                             statusMessage = if (grantResult == PackageManager.PERMISSION_GRANTED) {
                                 "Permission Shizuku accordée. Liaison UserService en cours..."
                             } else {
@@ -383,7 +421,7 @@ class MainActivity : ComponentActivity() {
                         Shizuku.addRequestPermissionResultListener(permListener)
                     } catch (_: Throwable) {
                     }
-                    refreshShizukuState()
+                    refreshAllStates(manual = false)
                     onDispose {
                         try {
                             Shizuku.removeRequestPermissionResultListener(permListener)
@@ -392,47 +430,37 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher, availRamMb) {
+                val appsPair: Pair<List<InstalledAppItem>, Int> = remember(includeNonLauncher, availRamMb, refreshTick) {
                     getAppsList(includeNonLauncher)
                 }
                 val installedApps: List<InstalledAppItem> = appsPair.first
                 val rawCount: Int = appsPair.second
 
-                val keptPackages = remember {
+                val selectedPackages = remember {
                     mutableStateListOf<String>().apply {
                         val saved: Set<String> =
-                            prefs.getStringSet("kept_packages", emptySet()) ?: emptySet()
+                            prefs.getStringSet("selected_to_stop_packages", emptySet()) ?: emptySet()
                         addAll(saved)
                     }
                 }
 
-                fun saveKeptPackages() {
-                    prefs.edit().putStringSet("kept_packages", keptPackages.toSet()).apply()
+                fun saveSelectedPackages() {
+                    prefs.edit().putStringSet("selected_to_stop_packages", selectedPackages.toSet()).apply()
                 }
 
-                fun toggleKept(pkg: String, checked: Boolean) {
+                fun toggleSelected(pkg: String, checked: Boolean) {
                     if (checked) {
-                        if (!keptPackages.contains(pkg)) keptPackages.add(pkg)
+                        if (!selectedPackages.contains(pkg)) selectedPackages.add(pkg)
                     } else {
-                        keptPackages.remove(pkg)
+                        selectedPackages.remove(pkg)
                     }
-                    saveKeptPackages()
+                    saveSelectedPackages()
                 }
 
-                fun keepAllVisible(apps: List<InstalledAppItem>) {
-                    for (app in apps) {
-                        if (!keptPackages.contains(app.packageName)) {
-                            keptPackages.add(app.packageName)
-                        }
-                    }
-                    saveKeptPackages()
-                    statusMessage = "${apps.size} applications ajoutées à Gardées."
-                }
-
-                fun clearKeptPackages() {
-                    keptPackages.clear()
-                    saveKeptPackages()
-                    statusMessage = "Liste Gardées réinitialisée (paquets critiques toujours protégés)."
+                fun clearSelectedPackages() {
+                    selectedPackages.clear()
+                    saveSelectedPackages()
+                    statusMessage = "Sélection vidée."
                 }
 
                 fun executeStopQueue(itemsToClose: List<InstalledAppItem>, labelMode: String) {
@@ -444,28 +472,30 @@ class MainActivity : ComponentActivity() {
                         )
                     val pkgs = ordered.map { it.packageName }
                     if (ordered.isEmpty()) {
-                        statusMessage = "Aucune application non protégée à traiter."
+                        statusMessage = "Aucune application non protégée cochée."
                         return
                     }
 
-                    refreshShizukuState()
+                    refreshAllStates(manual = false)
                     if (shizukuReady && userService != null && !isStoppingAuto) {
                         isStoppingAuto = true
-                        statusMessage = "Arrêt forcé auto via Shizuku (${pkgs.size} cibles)..."
+                        statusMessage = "Arrêt forcé des ${pkgs.size} apps cochées via Shizuku..."
                         coroutineScope.launch {
                             val result = withContext(Dispatchers.IO) {
                                 forceStopViaUserService(pkgs)
                             }
-                            availRamMb = getRamInfoMb().first
                             isStoppingAuto = false
                             if (result != null) {
-                                val (okCount, errCount) = result
-                                statusMessage = "$labelMode : $okCount arrêtées via am force-stop ($errCount ignorées/échec). RAM libre : $availRamMb Mo."
+                                val (stoppedList, errCount) = result
+                                selectedPackages.removeAll(stoppedList.toSet())
+                                saveSelectedPackages()
+                                refreshAllStates(manual = false)
+                                statusMessage = "$labelMode : ${stoppedList.size} arrêtées via am force-stop ($errCount échec). RAM libre : $availRamMb Mo."
                             } else {
                                 killBackgroundForTargets(pkgs)
                                 queuePackages = ordered
                                 queueIndex = 0
-                                statusMessage = "Service indisponible : repli file réglages (${ordered.size} cibles)."
+                                statusMessage = "Service indisponible : repli file réglages (${ordered.size} cochées)."
                                 openAppSettings(ordered[0].packageName)
                             }
                         }
@@ -475,7 +505,7 @@ class MainActivity : ComponentActivity() {
                         queuePackages = ordered
                         queueIndex = 0
                         val hint = if (shizukuReady) "Liaison service en cours..." else "File réglages"
-                        statusMessage = "$labelMode (${ordered.size} cibles) • $hint : 1/${ordered.size}"
+                        statusMessage = "$labelMode (${ordered.size} cochées) • $hint : 1/${ordered.size}"
                         openAppSettings(ordered[0].packageName)
                     }
                 }
@@ -483,10 +513,10 @@ class MainActivity : ComponentActivity() {
                 fun startQueueWithItems(itemsToClose: List<InstalledAppItem>, labelMode: String) {
                     val safeList = itemsToClose.filter { !isProtectedPackage(it.packageName) }
                     if (safeList.isEmpty()) {
-                        statusMessage = "Aucune application non protégée à traiter."
+                        statusMessage = "Aucune application non protégée cochée."
                         return
                     }
-                    refreshShizukuState()
+                    refreshAllStates(manual = false)
                     if (shizukuReady && userService != null && safeList.size > 5) {
                         pendingConfirmItems = safeList
                         pendingConfirmLabel = labelMode
@@ -506,7 +536,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         queuePackages = emptyList()
                         queueIndex = 0
-                        availRamMb = getRamInfoMb().first
+                        refreshAllStates(manual = false)
                         statusMessage = "File terminée."
                     }
                 }
@@ -519,17 +549,14 @@ class MainActivity : ComponentActivity() {
                     val callback = object : ConnectivityManager.NetworkCallback() {
                         override fun onAvailable(network: Network) {
                             super.onAvailable(network)
-                            val currentRam: Pair<Long, Long> = getRamInfoMb()
                             wifiConnected = true
-                            availRamMb = currentRam.first
-                            refreshShizukuState()
+                            refreshAllStates(manual = false)
                         }
 
                         override fun onLost(network: Network) {
                             super.onLost(network)
-                            val currentRam: Pair<Long, Long> = getRamInfoMb()
                             wifiConnected = false
-                            availRamMb = currentRam.first
+                            refreshAllStates(manual = false)
                         }
                     }
 
@@ -539,27 +566,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, keptPackages.toList(), installedApps) {
+                val filteredApps: List<InstalledAppItem> = remember(searchQuery, showOnlyChecked, selectedPackages.toList(), installedApps) {
                     installedApps.filter { item ->
                         val matchesQuery = searchQuery.isBlank() ||
                             item.appName.contains(searchQuery.trim(), ignoreCase = true) ||
                             item.packageName.contains(searchQuery.trim(), ignoreCase = true)
-                        val matchesFilter = !showOnlyChecked || keptPackages.contains(item.packageName)
+                        val matchesFilter = !showOnlyChecked || selectedPackages.contains(item.packageName)
                         matchesQuery && matchesFilter
                     }
                 }
 
-                val targetApps: List<InstalledAppItem> = remember(installedApps, keptPackages.toList()) {
+                val checkedTargets: List<InstalledAppItem> = remember(installedApps, selectedPackages.toList()) {
                     installedApps
-                        .filter { !isProtectedPackage(it.packageName) && !keptPackages.contains(it.packageName) }
+                        .filter { selectedPackages.contains(it.packageName) && !isProtectedPackage(it.packageName) }
                         .sortedWith(
                             compareByDescending<InstalledAppItem> { it.ramMb }
                                 .thenBy { it.appName.lowercase() }
                         )
-                }
-
-                val activeHeavyTargets: List<InstalledAppItem> = remember(targetApps) {
-                    targetApps.filter { it.ramMb > 0L }
                 }
 
                 if (pendingConfirmItems != null) {
@@ -570,9 +593,9 @@ class MainActivity : ComponentActivity() {
                         text = {
                             val sampleNames = toStop.take(5).joinToString(", ") { it.appName }
                             Text(
-                                "Arrêter immédiatement ${toStop.size} applications via Shizuku ?\n" +
-                                    "Exemples : $sampleNames\n" +
-                                    "NexusMemory, Shizuku et Termux sont protégés."
+                                "Fermer uniquement les ${toStop.size} applications cochées via Shizuku ?\n" +
+                                    "Cibles : $sampleNames\n" +
+                                    "Les applications non cochées resteront intactes."
                             )
                         },
                         confirmButton = {
@@ -584,7 +607,7 @@ class MainActivity : ComponentActivity() {
                                     executeStopQueue(itemsSnapshot, labelSnapshot)
                                 }
                             ) {
-                                Text("Arrêter (${toStop.size})")
+                                Text("Fermer (${toStop.size})")
                             }
                         },
                         dismissButton = {
@@ -602,7 +625,16 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     item {
-                        Text("NexusMemory", style = MaterialTheme.typography.headlineSmall)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("NexusMemory", style = MaterialTheme.typography.headlineSmall)
+                            TextButton(onClick = { refreshAllStates(manual = true) }) {
+                                Text("Actualiser")
+                            }
+                        }
                     }
 
                     item {
@@ -614,50 +646,52 @@ class MainActivity : ComponentActivity() {
                                 Text("Wi-Fi : ${if (wifiConnected) "Connecté" else "Inactif"}")
                                 Text("RAM libre : $availRamMb Mo / $totalRamMb Mo")
                                 val shizukuLabel = when {
-                                    shizukuReady && userService != null -> "Shizuku : Auto force-stop prêt"
+                                    shizukuReady && serviceConnected -> "Shizuku : Auto force-stop prêt"
                                     shizukuReady -> "Shizuku : Autorisé (liaison service...)"
-                                    isShizukuBinderReady() -> "Shizuku : Service actif (autorisation requise)"
+                                    shizukuBinderActive -> "Shizuku : Service actif (autorisation requise)"
                                     shizukuInstalled -> "Shizuku : Installé (démarrer Shizuku)"
                                     else -> "Shizuku : Non installé"
                                 }
                                 Text(shizukuLabel, style = MaterialTheme.typography.bodySmall)
                                 Text(
-                                    "Gardées : ${keptPackages.size} | Non cochées : ${targetApps.size} | Actives (>0 Mo) : ${activeHeavyTargets.size}",
+                                    "Cochées à fermer : ${checkedTargets.size}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
 
-                                if (!shizukuReady && isShizukuBinderReady()) {
+                                if (!shizukuReady && shizukuBinderActive) {
                                     OutlinedButton(
                                         onClick = { requestShizukuPermissionSafe() },
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Text("Autoriser Shizuku")
                                     }
-                                } else if (shizukuReady && userService == null) {
+                                } else if (shizukuReady && !serviceConnected) {
                                     OutlinedButton(
-                                        onClick = { ensureUserServiceBound() },
+                                        onClick = {
+                                            ensureUserServiceBound()
+                                            serviceConnected = userService != null
+                                        },
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Text("Connecter service Shizuku")
                                     }
+                                } else if (shizukuInstalled && !shizukuBinderActive) {
+                                    OutlinedButton(
+                                        onClick = { openShizukuApp() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Ouvrir Shizuku")
+                                    }
                                 }
 
                                 Button(
-                                    onClick = { startQueueWithItems(activeHeavyTargets, "Actives > 0 Mo") },
-                                    enabled = activeHeavyTargets.isNotEmpty() && !isStoppingAuto,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("Fermer actives > 0 Mo (${activeHeavyTargets.size})")
-                                }
-
-                                OutlinedButton(
-                                    onClick = { startQueueWithItems(targetApps, "Toutes non cochées") },
-                                    enabled = targetApps.isNotEmpty() && !isStoppingAuto,
+                                    onClick = { startQueueWithItems(checkedTargets, "Sélection cochée") },
+                                    enabled = checkedTargets.isNotEmpty() && !isStoppingAuto,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text(
-                                        if (shizukuReady && userService != null) "Fermer auto toutes non cochées (${targetApps.size})"
-                                        else "Fermer toutes non cochées (${targetApps.size})"
+                                        if (shizukuReady && serviceConnected) "Fermer auto sélectionnées (${checkedTargets.size})"
+                                        else "Fermer sélectionnées (${checkedTargets.size})"
                                     )
                                 }
 
@@ -666,27 +700,20 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     OutlinedButton(
-                                        onClick = { keepAllVisible(filteredApps) },
+                                        onClick = { clearSelectedPackages() },
+                                        enabled = selectedPackages.isNotEmpty(),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Garder tout", maxLines = 1, softWrap = false)
+                                        Text("Tout décocher", maxLines = 1, softWrap = false)
                                     }
                                     TextButton(
-                                        onClick = { clearKeptPackages() },
-                                        enabled = keptPackages.isNotEmpty()
+                                        onClick = {
+                                            copyDiagnosticReport(includeNonLauncher)
+                                            statusMessage = "Rapport brut ($rawCount paquets) copié dans le presse-papiers."
+                                        }
                                     ) {
-                                        Text("Vider", maxLines = 1, softWrap = false)
+                                        Text("Diagnostic ($rawCount)", maxLines = 1, softWrap = false)
                                     }
-                                }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        copyDiagnosticReport(includeNonLauncher)
-                                        statusMessage = "Rapport brut ($rawCount paquets) copié dans le presse-papiers."
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("Copier diagnostic ($rawCount bruts)")
                                 }
 
                                 if (queuePackages.isNotEmpty() && queueIndex < queuePackages.size) {
@@ -709,18 +736,18 @@ class MainActivity : ComponentActivity() {
                                             }
                                             OutlinedButton(
                                                 onClick = {
-                                                    toggleKept(currentTarget.packageName, true)
+                                                    toggleSelected(currentTarget.packageName, false)
                                                     advanceQueue(openNextSettings = false)
                                                 },
                                                 modifier = Modifier.weight(1f)
                                             ) {
-                                                Text("Garder", maxLines = 1)
+                                                Text("Décocher", maxLines = 1)
                                             }
                                             TextButton(
                                                 onClick = {
                                                     queuePackages = emptyList()
                                                     queueIndex = 0
-                                                    availRamMb = getRamInfoMb().first
+                                                    refreshAllStates(manual = false)
                                                     statusMessage = "File arrêtée."
                                                 }
                                             ) {
@@ -763,7 +790,7 @@ class MainActivity : ComponentActivity() {
                             FilterChip(
                                 selected = showOnlyChecked,
                                 onClick = { showOnlyChecked = true },
-                                label = { Text("Gardées (${keptPackages.size})") }
+                                label = { Text("Cochées (${checkedTargets.size})") }
                             )
                         }
                     }
@@ -785,12 +812,12 @@ class MainActivity : ComponentActivity() {
                     }
 
                     items(items = filteredApps, key = { it.packageName }) { app: InstalledAppItem ->
-                        val isKept: Boolean = keptPackages.contains(app.packageName)
+                        val isChecked: Boolean = selectedPackages.contains(app.packageName)
                         val isProtected = isProtectedPackage(app.packageName)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { toggleKept(app.packageName, !isKept) }
+                                .clickable { toggleSelected(app.packageName, !isChecked) }
                         ) {
                             Row(
                                 modifier = Modifier
@@ -799,9 +826,9 @@ class MainActivity : ComponentActivity() {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Checkbox(
-                                    checked = isKept,
+                                    checked = isChecked,
                                     onCheckedChange = { checked: Boolean ->
-                                        toggleKept(app.packageName, checked)
+                                        toggleSelected(app.packageName, checked)
                                     }
                                 )
                                 Column(
@@ -818,7 +845,7 @@ class MainActivity : ComponentActivity() {
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
-                                if (!isKept && !isProtected) {
+                                if (!isProtected) {
                                     TextButton(onClick = { openAppSettings(app.packageName) }) {
                                         Text("Réglages")
                                     }
