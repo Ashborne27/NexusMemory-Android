@@ -814,13 +814,6 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
 
-                                    LaunchedEffect(wifiConnected) {
-                                        val justConnectedWifi = !wasWifiConnected && wifiConnected
-                                        wasWifiConnected = wifiConnected
-                                        if (justConnectedWifi && shizukuReady && serviceConnected && userService != null && !isStoppingAuto && uncheckedTargets.isNotEmpty()) {
-                                            onServiceConnected(uncheckedTargets)
-                                        }
-                                    }
                                     enabled = uncheckedTargets.isNotEmpty() && !isStoppingAuto,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
@@ -829,6 +822,14 @@ class MainActivity : ComponentActivity() {
                                         else "Fermer non cochées (${uncheckedTargets.size})"
                                     )
                                 }
+
+LaunchedEffect(wifiConnected) {
+val justConnectedWifi = !wasWifiConnected && wifiConnected
+wasWifiConnected = wifiConnected
+if (justConnectedWifi && shizukuReady && serviceConnected && userService != null && !isStoppingAuto && uncheckedTargets.isNotEmpty()) {
+onServiceConnected(uncheckedTargets)
+}
+}
 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
