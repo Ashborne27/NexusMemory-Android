@@ -407,6 +407,15 @@ class MainActivity : ComponentActivity() {
                         ensureUserServiceBound()
                     }
                     serviceConnected = userService != null
+                    if (shizukuReady && userService == null) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            val nowConnected = userService != null
+                            if (nowConnected != serviceConnected) {
+                                serviceConnected = nowConnected
+                                refreshTick++
+                            }
+                        }, 600L)
+                    }
                     refreshTick++
                     if (manual) {
                         statusMessage = "Actualisé • RAM libre : $availRamMb Mo"
