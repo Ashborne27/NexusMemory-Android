@@ -387,6 +387,13 @@ class MainActivity : ComponentActivity() {
                     }
                     if (wifiConnected && shizukuReady) {
                         refreshTick++
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                val laterConnected = userService != null || isServiceBound
+                                if (laterConnected) {
+                                    serviceConnected = true
+                                    refreshTick++
+                                }
+                            }, 1800L)
                     }
                 }
                 var isStoppingAuto: Boolean by remember { mutableStateOf(false) }
