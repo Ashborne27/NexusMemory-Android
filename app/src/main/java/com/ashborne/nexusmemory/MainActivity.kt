@@ -397,6 +397,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 var isStoppingAuto: Boolean by remember { mutableStateOf(false) }
+                var wasWifiConnected by remember { mutableStateOf(false) }
                 var pendingConfirmItems: List<InstalledAppItem>? by remember { mutableStateOf(null) }
                 var pendingConfirmLabel: String by remember { mutableStateOf("") }
                 var pendingUncheckStopped: Boolean by remember { mutableStateOf(false) }
@@ -812,6 +813,14 @@ class MainActivity : ComponentActivity() {
                                             uncheckStopped = false
                                         )
                                     },
+
+                                    LaunchedEffect(wifiConnected) {
+                                        val justConnectedWifi = !wasWifiConnected && wifiConnected
+                                        wasWifiConnected = wifiConnected
+                                        if (justConnectedWifi && shizukuReady && serviceConnected && userService != null && !isStoppingAuto && uncheckedTargets.isNotEmpty()) {
+                                            onServiceConnected(uncheckedTargets)
+                                        }
+                                    }
                                     enabled = uncheckedTargets.isNotEmpty() && !isStoppingAuto,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
