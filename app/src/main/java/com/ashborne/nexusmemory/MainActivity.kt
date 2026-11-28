@@ -635,7 +635,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(wifiConnected, shizukuReady) {
                 if (shizukuReady && userService == null) {
                     try {
-                        bindForceStopService()
+                        ensureUserServiceBound()
                     } catch (_: Throwable) {
                     }
                 }
