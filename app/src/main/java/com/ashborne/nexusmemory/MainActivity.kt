@@ -827,7 +827,7 @@ LaunchedEffect(wifiConnected) {
 val justConnectedWifi = !wasWifiConnected && wifiConnected
 wasWifiConnected = wifiConnected
 if (justConnectedWifi && shizukuReady && serviceConnected && userService != null && !isStoppingAuto && uncheckedTargets.isNotEmpty()) {
-onServiceConnected(uncheckedTargets)
+onServiceConnected(uncheckedTargets, "Apps non cochées", false)
 }
 }
 
