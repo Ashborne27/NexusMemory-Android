@@ -387,10 +387,6 @@ class MainActivity : ComponentActivity() {
                     }
                     if (wifiConnected && shizukuReady) {
                         refreshTick++
-                        // clear_bind_status
-                        if ((userService != null || serviceConnected) && statusMessage.contains("Liaison UserService en cours")) {
-                            statusMessage = ""
-                        }
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                 val laterConnected = userService != null || isServiceBound
                                 if (laterConnected) {
